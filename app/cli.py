@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 
+from app.output import emit
 from app.roles import Role
 from core.version import __version__
 from ui.i18n import t
@@ -19,7 +20,19 @@ PROGRAM = "hostbridge"
 def _build_parser():
     import argparse
 
-    parser = argparse.ArgumentParser(
+    class Parser(argparse.ArgumentParser):
+        """Route help and usage errors through :func:`emit`.
+
+        argparse writes straight to ``sys.stdout``/``sys.stderr``. In a windowed build
+        those are the null device, so ``--help`` and every argument error would vanish
+        without a trace -- and before :func:`ensure_streams` existed, they crashed.
+        """
+
+        def _print_message(self, message, file=None):  # noqa: ARG002 - argparse hook
+            if message:
+                emit(message, error=file is not None and file is sys.stderr)
+
+    parser = Parser(
         prog=PROGRAM,
         description=t("cli.description"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -58,7 +71,7 @@ def _role_of(args) -> Role:
 
 
 def _not_yet(role: Role) -> int:
-    sys.stderr.write(t("cli.role_unavailable", role=role.value) + "\n")
+    emit(t("cli.role_unavailable", role=role.value), error=True)
     return 4
 
 
@@ -74,7 +87,7 @@ def dispatch(argv: list[str]) -> int:
     role = _role_of(args)
 
     if role is Role.VERSION:
-        sys.stdout.write(f"{PROGRAM} {__version__}\n")
+        emit(f"{PROGRAM} {__version__}")
         return 0
 
     # Roles are wired up milestone by milestone; each arrives with its own module rather

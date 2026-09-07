@@ -27,6 +27,12 @@ def _init_language() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # First, before anything can print: a windowed PyInstaller build has no console, and
+    # there sys.stdout and sys.stderr are None until this runs.
+    from app.output import emit, ensure_streams
+
+    ensure_streams()
+
     _init_language()
 
     from app.cli import dispatch
@@ -35,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return dispatch(args)
     except KeyboardInterrupt:
-        sys.stderr.write("\ninterrupted\n")
+        emit("interrupted", error=True)
         return 130
 
 
