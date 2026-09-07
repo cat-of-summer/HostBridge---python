@@ -1,0 +1,70 @@
+/* Dark palette for the desktop interface.
+ *
+ * Loaded through core.paths.resource_dir("assets") so it works both from the source tree
+ * and from a collected bundle. Kept as a stylesheet rather than a QPalette because the
+ * table needs per-state row colours that a palette cannot express.
+ */
+
+QWidget {
+    background-color: #1e1f22;
+    color: #dfe1e5;
+    font-size: 13px;
+}
+
+QTabWidget::pane {
+    border: 1px solid #303236;
+    top: -1px;
+}
+
+QTabBar::tab {
+    background: #26282c;
+    padding: 6px 14px;
+    border: 1px solid #303236;
+    border-bottom: none;
+}
+
+QTabBar::tab:selected {
+    background: #1e1f22;
+    color: #ffffff;
+}
+
+QTableView {
+    background-color: #1a1b1e;
+    alternate-background-color: #202226;
+    gridline-color: #2c2e33;
+    selection-background-color: #2f5d8a;
+    selection-color: #ffffff;
+    border: 1px solid #303236;
+}
+
+QHeaderView::section {
+    background-color: #26282c;
+    padding: 5px;
+    border: none;
+    border-right: 1px solid #303236;
+    border-bottom: 1px solid #303236;
+}
+
+QPushButton {
+    background-color: #2d3036;
+    border: 1px solid #3a3d44;
+    border-radius: 4px;
+    padding: 5px 14px;
+}
+
+QPushButton:hover { background-color: #363a41; }
+QPushButton:pressed { background-color: #23262b; }
+QPushButton:disabled { color: #6b6e75; background-color: #24262a; }
+
+QLineEdit, QComboBox, QSpinBox, QPlainTextEdit {
+    background-color: #17181b;
+    border: 1px solid #3a3d44;
+    border-radius: 4px;
+    padding: 4px 6px;
+    selection-background-color: #2f5d8a;
+}
+
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #4a8ac9; }
+QLineEdit[invalid="true"] { border-color: #c9564a; }
+
+QStatusBar { background-color: #26282c; }

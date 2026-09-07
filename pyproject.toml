@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hostbridge"
+version = "0.1.0"
+description = "Local DNS resolver and manager for virtual development domains"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+
+# Pinned to minor versions: this app rewrites the machine's name-resolution policy, so a
+# surprise minor bump in a dependency must never arrive silently between two builds.
+dependencies = [
+    # Pure Python, no dependencies of its own, MIT. Chosen over dnspython because that
+    # package occupies the top-level name `dns`, which would silently shadow a local
+    # package of the same name, and because it drags optional DoH transports along.
+    "dnslib~=0.9",
+    "PySide6~=6.8",
+    # The Windows service dispatcher: a bare exe registered with `sc create` and no
+    # StartServiceCtrlDispatcher handshake fails with error 1053.
+    'pywin32>=308; sys_platform == "win32"',
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest~=8.3",
+    "pytest-cov~=6.0",
+    "ruff~=0.8",
+    "pyinstaller~=6.11",
+]
+
+[project.scripts]
+hostbridge = "main:main"
+
+[tool.setuptools]
+packages = ["app", "client", "core", "daemon", "discover", "resolver", "system", "ui"]
+# The entry point lives in a top-level module rather than a package, mirroring ccas
+# and dockerbundle.
+py-modules = ["main"]
+
+[tool.setuptools.package-data]
+"ui" = ["../lang/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "docker: needs a working Docker daemon; deselect with -m 'not docker'",
+    "admin: needs administrator/root privileges; deselect with -m 'not admin'",
+    "network: binds local sockets; deselect with -m 'not network'",
+]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
