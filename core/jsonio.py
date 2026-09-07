@@ -31,11 +31,21 @@ def read_json(path: str | os.PathLike[str], default: Any = None) -> Any:
         return default
 
 
-def write_json_atomic(path: str | os.PathLike[str], obj: Any, *, harden: bool = True) -> None:
+def write_json_atomic(path: str | os.PathLike[str], obj: Any, *, harden: bool = False) -> None:
     """Write ``obj`` as JSON, replacing ``path`` in one step.
 
     ``fsync`` before ``replace`` is what makes this survive a power cut rather than merely
     a crash: without it the rename can reach the disk before the data it points at.
+
+    ``harden`` is off by default, and deliberately so. On Windows tightening an ACL means
+    running ``icacls``, an external process -- and the daemon rewrites ``domains.json`` on
+    every Docker event, which during a ``compose up`` is several times a second. Paying a
+    process spawn for a file that holds no secret is wrong twice over.
+
+    Confidentiality on Windows comes from the directory ACL instead: the daemon hardens its
+    state directory once at startup and everything created inside inherits it. Pass
+    ``harden=True`` only for a file that carries a secret on its own -- ``daemon.json``,
+    which holds the control-API token, is the one that does.
     """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)

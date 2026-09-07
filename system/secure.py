@@ -1,9 +1,13 @@
 """Tighten filesystem permissions on files that must not be world-readable.
 
-Two files here are genuinely sensitive: ``daemon.json`` carries the control-API bearer
-token, and any process that can read it can add a resolution rule. This is why
-:func:`harden_file` really does call ``icacls`` on Windows, unlike its ccas ancestor where
-the Windows branch was a no-op -- ccas only ever hardened directories.
+One file here is genuinely sensitive: ``daemon.json`` carries the control-API bearer
+token, and any process that can read it can add a resolution rule. That file is written
+with ``harden=True`` and :func:`harden_file` really does call ``icacls`` for it.
+
+Everything else relies on :func:`harden_dir` over the state directory, applied once when
+the daemon starts, because on Windows every file-level call is an external process and the
+domain store is rewritten on every Docker event. This is also why ccas only ever hardened
+directories on Windows -- that was the right instinct.
 """
 
 from __future__ import annotations

@@ -49,7 +49,9 @@ bash build/build.sh          # Linux, macOS, Git Bash на Windows
 pwsh build/build.ps1         # PowerShell
 ```
 
-Результат — `dist/hostbridge-<os>-<arch>.zip`.
+Результат — `dist/hostbridge-<os>-<arch>.tar.gz` на Linux и `.zip` на Windows.
+Начиная с этапа M4 сборка под Windows даёт вместо архива инсталлятор
+`hostbridge-setup-windows-x64.exe`, который сразу регистрирует службу.
 `SKIP_TESTS=true` пропускает прогон тестов.
 
 ## Разработка

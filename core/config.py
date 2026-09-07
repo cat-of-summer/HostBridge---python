@@ -62,12 +62,9 @@ class UserConfig:
         )
 
     def save(self) -> None:
-        # harden=False: these are preferences, not secrets, and tightening the ACL on a
-        # file in the user's own profile only creates support questions.
-        #
         # Failing to save a preference must never take the GUI down with it.
         with contextlib.suppress(OSError):
-            write_json_atomic(config_file(), asdict(self), harden=False)
+            write_json_atomic(config_file(), asdict(self))
 
 
 @dataclass

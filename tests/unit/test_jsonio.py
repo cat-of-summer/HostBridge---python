@@ -48,7 +48,47 @@ def test_write_creates_missing_parent_directories(tmp_path):
     assert jsonio.read_json(target) == [1, 2, 3]
 
 
-def test_write_never_shells_out_when_hardening_is_declined(tmp_path):
+def test_an_ordinary_write_never_shells_out_even_on_windows(tmp_path, monkeypatch):
+    """Regression: the default write must not spawn a process on any platform.
+
+    This forces the Windows branch while running on Linux, because the original bug was
+    invisible on POSIX -- there ``harden_file`` is a ``chmod`` -- and only surfaced on the
+    Windows CI runner, where it is an ``icacls`` process. The daemon rewrites the domain
+    store on every Docker event, so a process spawn per write is not acceptable.
+    """
+    from system import secure
+
+    monkeypatch.setattr(secure, "IS_WINDOWS", True)
     # The autouse no_subprocess fixture turns any real spawn into a failure, so this
-    # passing is the assertion.
-    jsonio.write_json_atomic(tmp_path / "quiet.json", {}, harden=False)
+    # completing is the assertion.
+    jsonio.write_json_atomic(tmp_path / "quiet.json", {"a": 1})
+    assert jsonio.read_json(tmp_path / "quiet.json") == {"a": 1}
+
+
+def test_explicit_hardening_tightens_the_acl_on_windows(tmp_path, monkeypatch, fake_spawn):
+    """The opt-in path is what ``daemon.json`` uses, so it has to actually run."""
+    from system import secure
+
+    monkeypatch.setattr(secure, "IS_WINDOWS", True)
+    monkeypatch.setenv("USERNAME", "dev")
+    monkeypatch.delenv("USERDOMAIN", raising=False)
+    calls = fake_spawn()
+
+    target = tmp_path / "daemon.json"
+    jsonio.write_json_atomic(target, {"token": "s3cret"}, harden=True)
+
+    assert calls == [("icacls", str(target), "/inheritance:r", "/grant:r", "dev:F")]
+
+
+def test_a_failed_hardening_does_not_lose_the_written_file(tmp_path, monkeypatch, fake_spawn):
+    from system import secure
+
+    monkeypatch.setattr(secure, "IS_WINDOWS", True)
+    monkeypatch.setenv("USERNAME", "dev")
+    fake_spawn(returncode=5, stderr="access denied")
+
+    target = tmp_path / "daemon.json"
+    jsonio.write_json_atomic(target, {"token": "s3cret"}, harden=True)
+
+    # Hardening is best-effort: the daemon must still start, and the token file must exist.
+    assert jsonio.read_json(target) == {"token": "s3cret"}

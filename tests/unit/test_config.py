@@ -72,3 +72,21 @@ def test_non_string_entries_are_dropped_from_list_fields():
         harden=False,
     )
     assert DaemonSettings.load().upstreams == ["1.1.1.1"]
+
+
+def test_saving_settings_never_shells_out_on_windows(monkeypatch):
+    """Regression: DaemonSettings.save() spawned icacls on Windows and broke CI."""
+    from system import secure
+
+    monkeypatch.setattr(secure, "IS_WINDOWS", True)
+    # The autouse no_subprocess fixture fails the test if a process is started.
+    DaemonSettings(listen_address="127.0.0.3").save()
+    assert DaemonSettings.load().listen_address == "127.0.0.3"
+
+
+def test_saving_user_config_never_shells_out_on_windows(monkeypatch):
+    from system import secure
+
+    monkeypatch.setattr(secure, "IS_WINDOWS", True)
+    UserConfig(language="ru").save()
+    assert UserConfig.load().language == "ru"

@@ -52,10 +52,39 @@ print(os.environ.get('HOSTBRIDGE_ARTIFACT_NAME') or f'hostbridge-{name}-{arch}')
 
 [ -d "dist/$artifact" ] || { echo "PyInstaller produced no dist/$artifact" >&2; exit 1; }
 
-( cd dist && "$python" -m zipfile -c "${artifact}.zip" "$artifact" )
+# The release step stages assets behind `[ -f "$f" ]`, so the collected directory has to
+# become a single file.
+#
+# tar.gz on POSIX rather than zip, because zip does not carry the executable bit: unpacking
+# a zip would leave the user with a binary they have to chmod +x before it runs. On Windows
+# the bit does not exist and zip is what Explorer opens natively.
+#
+# No checksum file is written: the release pipeline records its own digest for every asset,
+# and a second one maintained here would only ever be the one that goes stale.
+"$python" - "$artifact" <<'PY'
+import os
+import pathlib
+import sys
+import tarfile
+import zipfile
 
-# No checksum file is written: the release pipeline records its own digest for every
-# asset, and a second one maintained here would only ever be the one that goes stale.
+name = sys.argv[1]
+dist = pathlib.Path("dist")
+source = dist / name
+
+if os.name == "nt":
+    archive = dist / f"{name}.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for path in sorted(source.rglob("*")):
+            if path.is_file():
+                bundle.write(path, path.relative_to(dist).as_posix())
+else:
+    archive = dist / f"{name}.tar.gz"
+    with tarfile.open(archive, "w:gz") as bundle:
+        bundle.add(source, arcname=name)
+
+print(f"packed {archive} ({archive.stat().st_size / 1048576:.1f} MiB)")
+PY
 
 echo
 echo "Artifacts in $root/dist:"
