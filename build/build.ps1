@@ -66,9 +66,8 @@ if (-not (Test-Path $collected)) { throw "PyInstaller produced no $collected" }
 
 $archive = "$collected.zip"
 Compress-Archive -Path $collected -DestinationPath $archive -Force
-$digest = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
-"$digest  $(Split-Path -Leaf $archive)" | Out-File -Encoding utf8 "$archive.sha256"
-Write-Output "$digest  $(Split-Path -Leaf $archive)"
+# No checksum file is written: the release pipeline records its own digest for every
+# asset, and a second one maintained here would only ever be the one that goes stale.
 
 Write-Output ""
 Write-Output "Artifacts in $root\dist:"

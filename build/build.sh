@@ -53,14 +53,9 @@ print(os.environ.get('HOSTBRIDGE_ARTIFACT_NAME') or f'hostbridge-{name}-{arch}')
 [ -d "dist/$artifact" ] || { echo "PyInstaller produced no dist/$artifact" >&2; exit 1; }
 
 ( cd dist && "$python" -m zipfile -c "${artifact}.zip" "$artifact" )
-"$python" - "$artifact" <<'PY'
-import hashlib, pathlib, sys
-name = sys.argv[1]
-archive = pathlib.Path("dist") / f"{name}.zip"
-digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-(pathlib.Path("dist") / f"{name}.zip.sha256").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
-print(f"{digest}  {archive.name}")
-PY
+
+# No checksum file is written: the release pipeline records its own digest for every
+# asset, and a second one maintained here would only ever be the one that goes stale.
 
 echo
 echo "Artifacts in $root/dist:"

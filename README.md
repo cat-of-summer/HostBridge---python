@@ -49,7 +49,7 @@ bash build/build.sh          # Linux, macOS, Git Bash на Windows
 pwsh build/build.ps1         # PowerShell
 ```
 
-Результат — `dist/hostbridge-<os>-<arch>.zip` и файл контрольной суммы рядом.
+Результат — `dist/hostbridge-<os>-<arch>.zip`.
 `SKIP_TESTS=true` пропускает прогон тестов.
 
 ## Разработка
