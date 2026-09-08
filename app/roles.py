@@ -12,6 +12,7 @@ from enum import Enum
 
 class Role(str, Enum):
     GUI = "gui"
+    CONSOLE = "console"
     SERVICE = "service"
     DAEMON_FOREGROUND = "daemon-foreground"
     REPAIR = "repair"

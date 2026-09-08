@@ -40,6 +40,9 @@ from ui.i18n import t
 #: --daemon-foreground needs Ctrl+Break or a kill to stop.
 HEARTBEAT_SECONDS = 0.2
 
+#: How often the store file is checked for an edit made by another process.
+STORE_POLL_SECONDS = 1.0
+
 
 class Runner:
     """Owns the sockets, the resolver and the applied policy for one daemon run."""
@@ -235,6 +238,40 @@ class Runner:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), interval)
 
+    # ---- watching the store ----------------------------------------------------------
+
+    def _store_stamp(self) -> tuple[float, int]:
+        try:
+            info = self.store.path.stat()
+        except OSError:
+            return (0.0, 0)
+        return (info.st_mtime, info.st_size)
+
+    async def _store_watch_loop(self) -> None:
+        """Notice edits made by another process and reload the zone.
+
+        Until the control API lands, the console screen writes to ``domains.json``
+        directly, and a running daemon would otherwise keep serving the old zone -- so a
+        domain toggled in the console would appear to do nothing. A stat every second is
+        far cheaper than the confusion that causes.
+
+        The store is written with an atomic replace, so a reader sees either the whole old
+        file or the whole new one; there is no torn read to guard against.
+        """
+        known = self._store_stamp()
+        while not self._stop.is_set():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), STORE_POLL_SECONDS)
+            if self._stop.is_set():
+                return
+            current = self._store_stamp()
+            if current != known:
+                known = current
+                try:
+                    self.reload()
+                except Exception as exc:  # noqa: BLE001 - a bad edit must not kill the daemon
+                    log.error(f"runner: reloading the store failed: {exc!r}")
+
     # ---- stop ----------------------------------------------------------------------
 
     def request_stop(self) -> None:
@@ -242,7 +279,7 @@ class Runner:
 
     async def serve_forever(self) -> None:
         loop = asyncio.get_running_loop()
-        tasks = [loop.create_task(self._heartbeat())]
+        tasks = [loop.create_task(self._heartbeat()), loop.create_task(self._store_watch_loop())]
         if self.settings.traefik_enabled:
             tasks.append(loop.create_task(self._traefik_loop()))
         try:

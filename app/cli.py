@@ -43,6 +43,7 @@ def _build_parser():
 
     roles = parser.add_mutually_exclusive_group()
     roles.add_argument("--gui", action="store_true", help=t("cli.help_gui"))
+    roles.add_argument("--console", action="store_true", help=t("cli.help_console"))
     roles.add_argument("--service", action="store_true", help=t("cli.help_service"))
     roles.add_argument(
         "--daemon-foreground", action="store_true", help=t("cli.help_daemon_foreground")
@@ -58,6 +59,7 @@ def _role_of(args) -> Role:
     if args.version:
         return Role.VERSION
     for flag, role in (
+        ("console", Role.CONSOLE),
         ("service", Role.SERVICE),
         ("daemon_foreground", Role.DAEMON_FOREGROUND),
         ("repair", Role.REPAIR),
@@ -67,7 +69,13 @@ def _role_of(args) -> Role:
     ):
         if getattr(args, flag):
             return role
-    return Role.GUI
+
+    # No role asked for. A console build started from a terminal -- which is what a double
+    # click on hostbridge-cli.exe looks like -- opens the screen rather than printing and
+    # vanishing. The windowed build has no console at all and goes to the GUI.
+    from ui.screen import interactive
+
+    return Role.CONSOLE if interactive() else Role.GUI
 
 
 def _not_yet(role: Role) -> int:
@@ -89,6 +97,11 @@ def dispatch(argv: list[str]) -> int:
     if role is Role.VERSION:
         emit(f"{PROGRAM} {__version__}")
         return 0
+
+    if role is Role.CONSOLE:
+        from ui.console import main as console_main
+
+        return console_main()
 
     if role is Role.STATUS:
         return _status()
