@@ -15,7 +15,35 @@
   "cli.help_uninstall": "удалить системную службу (нужны права администратора)",
   "cli.role_unavailable": "Режим «{role}» в этой сборке ещё недоступен.",
 
+  "cli.status_running": "Резолвер: работает (pid {pid})",
+  "cli.status_stopped": "Резолвер: не запущен",
+  "cli.status_stale": "Резолвер: не запущен, но после нечистого завершения могли остаться правила. Выполните --repair.",
+  "cli.status_listen": "Слушает: {listen}",
+  "cli.status_upstreams": "Пересылает на: {servers}",
+  "cli.status_rules": "Занято пространств имён: {count} через {mechanism}",
+  "cli.status_domains": "Домены: включено {enabled} из {total}",
+  "cli.repair_removed": "Снято оставшихся правил: {count}.",
+  "cli.repair_nothing": "Убирать нечего.",
+
+  "domain.error_empty": "Введите доменное имя.",
+  "domain.error_wildcard_bare": "Одинокая * перехватит все имена на машине. Используйте *.example.test.",
+  "domain.error_wildcard_position": "* допустима только как самая левая часть имени, вида *.example.test.",
+  "domain.error_too_long": "Доменное имя не может быть длиннее {limit} символов.",
+  "domain.error_empty_label": "В доменном имени не может быть пустой части.",
+  "domain.error_label_too_long": "Часть «{label}» длиннее {limit} символов.",
+  "domain.error_label_hyphen": "Часть «{label}» не может начинаться или заканчиваться дефисом.",
+  "domain.error_label_chars": "В части «{label}» есть недопустимые символы: {chars}",
+  "domain.error_single_label": "Добавьте суффикс, например .test — имя из одной части до DNS-сервера не доходит.",
+  "domain.warn_mdns": "Зона .local зарезервирована под mDNS и резолвится, не спрашивая DNS-сервер. Лучше {suggested}.",
+  "domain.warn_hsts_tld": "Зона .{tld} есть в списке предзагрузки HSTS, поэтому http:// принудительно станет https://.",
+  "domain.warn_wildcard_apex": "Wildcard не покрывает саму {apex}. Заведите её отдельной записью, если нужна.",
+
   "error.no_user": "Не удалось определить текущую учётную запись.",
   "error.icacls_failed": "Не удалось ужать права на {path}: {error}",
-  "error.icacls_returned": "icacls вернул {code} на {path}: {output}"
+  "error.icacls_returned": "icacls вернул {code} на {path}: {output}",
+  "error.bind_in_use": "Порт {port} на {address} уже занят. Остановите занявшую его программу или укажите другой адрес прослушивания в настройках.",
+  "error.bind_denied": "Недостаточно прав, чтобы занять {address}:{port}. Запустите резолвер от администратора.",
+  "error.bind_failed": "Не удалось слушать {address}:{port}: {error}",
+  "error.policy_failed": "Имена не зарегистрированы в системном резолвере: {error}",
+  "error.repair_failed": "Не удалось снять оставшиеся правила: {error}"
 }

@@ -90,6 +90,48 @@ def dispatch(argv: list[str]) -> int:
         emit(f"{PROGRAM} {__version__}")
         return 0
 
+    if role is Role.STATUS:
+        return _status()
+
+    if role is Role.REPAIR:
+        return _repair(quiet=args.quiet)
+
+    if role is Role.DAEMON_FOREGROUND:
+        return _daemon_foreground()
+
     # Roles are wired up milestone by milestone; each arrives with its own module rather
     # than as a branch bolted onto this function.
     return _not_yet(role)
+
+
+def _status() -> int:
+    from daemon.status import describe
+
+    for line in describe():
+        emit(line)
+    return 0
+
+
+def _repair(*, quiet: bool = False) -> int:
+    from daemon.repair import repair
+
+    return repair(quiet=quiet)
+
+
+def _daemon_foreground() -> int:
+    """Run the resolver in this process until interrupted.
+
+    Imported here rather than at module scope so that ``--version`` and ``--status`` do not
+    pay for asyncio, dnslib and the resolver on every invocation.
+    """
+    import asyncio
+
+    from daemon.runner import Runner, run_forever
+
+    runner = Runner()
+    try:
+        return asyncio.run(run_forever(runner))
+    except KeyboardInterrupt:
+        # asyncio.run re-raises this after cancelling the loop; run_forever's finally has
+        # already removed the rules, so there is nothing left to clean up here.
+        return 130

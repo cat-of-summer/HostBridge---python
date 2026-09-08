@@ -1,0 +1,282 @@
+"""The daemon's lifecycle, and the ordering guarantees that make it safe.
+
+The order below is the whole safety story, and it is asserted by a test rather than left to
+care:
+
+1. capture the machine's resolvers -- **before** any rule of ours exists, so what we capture
+   is the untouched configuration;
+2. **bind the sockets** -- if port 53 is taken the process stops here and the machine's name
+   resolution is byte-identical to a moment ago;
+3. write ``netstate.json`` holding what we are *about* to claim;
+4. only then apply the policy.
+
+Reverse on the way out. A crash skips steps 4 and 5, and the state file plus the marker on
+every rule are what let ``--repair`` clean up afterwards.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import os
+import signal
+import socket
+
+from core import log
+from core.config import DaemonSettings
+from core.match import Zone
+from core.paths import machine_home
+from core.store import DomainStore
+from daemon import netstate
+from daemon.policy import Policy, PolicyError, PolicyState, detect
+from resolver.cache import Cache
+from resolver.server import BindError, Resolver, Server, bind_sockets
+from resolver.upstream import Upstream, sanitise_upstreams
+from system import secure
+from ui.i18n import t
+
+#: Gives the interpreter a bytecode boundary to raise KeyboardInterrupt at. Without it a
+#: Proactor loop parked in GetQueuedCompletionStatus does not notice Ctrl+C promptly, and
+#: --daemon-foreground needs Ctrl+Break or a kill to stop.
+HEARTBEAT_SECONDS = 0.2
+
+
+class Runner:
+    """Owns the sockets, the resolver and the applied policy for one daemon run."""
+
+    def __init__(
+        self,
+        settings: DaemonSettings | None = None,
+        store: DomainStore | None = None,
+        policy: Policy | None = None,
+    ) -> None:
+        self.settings = settings or DaemonSettings.load()
+        self.store = store or DomainStore()
+        self.policy = policy or detect(self.settings.excluded_adapters)
+
+        self.resolver: Resolver | None = None
+        self.server: Server | None = None
+        self.applied = PolicyState()
+        self.upstreams: list[str] = []
+        self.policy_error: str = ""
+
+        self._stop = asyncio.Event()
+        self._sockets: tuple[list[socket.socket], list[socket.socket]] = ([], [])
+
+    # ---- addresses ----------------------------------------------------------------
+
+    def listen_addresses(self) -> list[str]:
+        addresses = [self.settings.listen_address]
+        if self.settings.listen_ipv6:
+            addresses.append("::1")
+        addresses.extend(self.settings.extra_listen)
+        return list(dict.fromkeys(addresses))
+
+    # ---- start ---------------------------------------------------------------------
+
+    def capture_upstreams(self) -> list[str]:
+        from system import dnsservers
+
+        raw = self.settings.upstreams or dnsservers.capture()
+        clean = sanitise_upstreams(raw, self.listen_addresses())
+        if not clean:
+            log.warn("runner: nothing usable was captured; falling back to public resolvers")
+            clean = sanitise_upstreams(self.settings.fallback_upstreams, self.listen_addresses())
+        return clean
+
+    def clear_leftovers(self) -> None:
+        """Undo a previous run that did not shut down cleanly.
+
+        Running before anything is applied, because a stale rule pointing at a socket
+        nobody is listening on is the one failure mode that makes a namespace stop
+        resolving entirely.
+        """
+        previous = netstate.read()
+        if previous is None:
+            return
+        if previous.clean_shutdown:
+            netstate.clear()
+            return
+        if netstate.pid_alive(previous.pid) and previous.pid != os.getpid():
+            log.warn(f"runner: another daemon appears to be running as pid {previous.pid}")
+            return
+
+        log.warn("runner: previous run did not shut down cleanly; clearing its rules")
+        with contextlib.suppress(PolicyError):
+            self.policy.remove_all()
+        netstate.clear()
+
+    def build_zone(self) -> Zone:
+        snapshot = self.store.load()
+        return Zone.from_domains(snapshot.domains)
+
+    async def start(self) -> None:
+        with contextlib.suppress(secure.PermissionWarning, OSError):
+            machine_home().mkdir(parents=True, exist_ok=True)
+            secure.harden_dir(machine_home())
+
+        self.clear_leftovers()
+        self.upstreams = self.capture_upstreams()
+
+        zone = self.build_zone()
+        cache = Cache()
+        upstream = Upstream(self.upstreams, cache, timeout=2.0)
+        self.resolver = Resolver(zone, cache, upstream, self.settings.local_ttl)
+
+        # Bind first. A failure here must leave the machine untouched.
+        udp, tcp = bind_sockets(self.listen_addresses(), self.settings.listen_port)
+        self._sockets = (udp, tcp)
+
+        state = netstate.NetState.start(
+            mechanism=self.policy.name,
+            listen=self.listen_addresses(),
+            port=self.settings.listen_port,
+            upstreams=self.upstreams,
+        )
+        state.intent = list(zone.namespaces())
+        netstate.write(state)
+
+        self.server = Server(self.resolver, udp, tcp)
+        await self.server.start()
+
+        self.apply_policy(zone, state)
+
+    def apply_policy(self, zone: Zone, state: netstate.NetState) -> None:
+        namespaces = list(zone.namespaces())
+        if not namespaces:
+            self.applied = PolicyState()
+            state.confirmed = []
+            netstate.write(state)
+            return
+
+        try:
+            self.applied = self.policy.apply(namespaces, self.listen_addresses())
+            self.policy_error = ""
+        except PolicyError as exc:
+            # Not fatal. The resolver is already listening and answers a direct query, which
+            # is exactly the state an unelevated --daemon-foreground lands in; saying so is
+            # more useful than refusing to run.
+            self.policy_error = str(exc)
+            log.warn(f"runner: {t('error.policy_failed', error=exc)}")
+            self.applied = PolicyState()
+
+        state.confirmed = list(self.applied.namespaces)
+        state.links = list(self.applied.links)
+        netstate.write(state)
+        self.policy.flush()
+
+    # ---- reload --------------------------------------------------------------------
+
+    def reload(self) -> None:
+        """Recompile the zone and re-claim the difference. Cheap enough to call freely."""
+        if self.resolver is None:
+            return
+        zone = self.build_zone()
+        before = self.resolver.zone.namespaces()
+        self.resolver.apply(zone)
+        if zone.namespaces() == before:
+            return
+
+        state = netstate.read() or netstate.NetState.start(
+            mechanism=self.policy.name,
+            listen=self.listen_addresses(),
+            port=self.settings.listen_port,
+            upstreams=self.upstreams,
+        )
+        state.intent = sorted(set(state.intent) | set(zone.namespaces()))
+        netstate.write(state)
+        self.apply_policy(zone, state)
+
+    # ---- stop ----------------------------------------------------------------------
+
+    def request_stop(self) -> None:
+        self._stop.set()
+
+    async def serve_forever(self) -> None:
+        heartbeat = asyncio.get_running_loop().create_task(self._heartbeat())
+        try:
+            await self._stop.wait()
+        finally:
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
+
+    async def _heartbeat(self) -> None:
+        while True:
+            await asyncio.sleep(HEARTBEAT_SECONDS)
+
+    async def stop(self) -> None:
+        if self.server is not None:
+            await self.server.stop()
+            self.server = None
+
+        if self.applied.namespaces or self.applied.links:
+            try:
+                self.policy.remove(self.applied)
+            except PolicyError as exc:
+                log.error(f"runner: could not remove rules on shutdown: {exc}")
+            else:
+                self.applied = PolicyState()
+
+        # Through the policy rather than dnsflush directly: it is the one seam the runner
+        # is given, and reaching around it would make this path untestable.
+        self.policy.flush()
+
+        state = netstate.read()
+        if state is not None:
+            state.clean_shutdown = True
+            state.confirmed = []
+            netstate.write(state)
+        netstate.clear()
+        log.write("runner: stopped")
+
+
+def install_signal_handlers(loop: asyncio.AbstractEventLoop, runner: Runner) -> None:
+    """Ask the loop to stop on Ctrl+C or a termination request.
+
+    ``loop.add_signal_handler`` raises NotImplementedError on Windows' Proactor loop, so
+    there the classic ``signal.signal`` is used with a thread-safe hand-off. SIGBREAK is
+    included because a console Ctrl+Break and the service control manager's shutdown both
+    surface there.
+    """
+    names = [signal.SIGINT, signal.SIGTERM]
+    breaksig = getattr(signal, "SIGBREAK", None)
+    if breaksig is not None:
+        names.append(breaksig)
+
+    if os.name != "nt":
+        for name in names:
+            with contextlib.suppress(NotImplementedError, ValueError, AttributeError):
+                loop.add_signal_handler(name, runner.request_stop)
+        return
+
+    def _handler(_signum, _frame) -> None:
+        loop.call_soon_threadsafe(runner.request_stop)
+
+    for name in names:
+        with contextlib.suppress(ValueError, OSError, AttributeError):
+            signal.signal(name, _handler)
+
+
+async def run_forever(runner: Runner) -> int:
+    loop = asyncio.get_running_loop()
+    install_signal_handlers(loop, runner)
+    try:
+        await runner.start()
+    except BindError as exc:
+        from app.output import emit
+
+        if exc.in_use:
+            emit(t("error.bind_in_use", address=exc.address, port=exc.port), error=True)
+        elif exc.denied:
+            emit(t("error.bind_denied", address=exc.address, port=exc.port), error=True)
+        else:
+            emit(t("error.bind_failed", address=exc.address, port=exc.port, error=exc.cause),
+                 error=True)
+        return 3
+
+    try:
+        await runner.serve_forever()
+    finally:
+        await runner.stop()
+    return 0

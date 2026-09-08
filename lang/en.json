@@ -15,7 +15,35 @@
   "cli.help_uninstall": "remove the system service (requires elevation)",
   "cli.role_unavailable": "'{role}' is not available in this build yet.",
 
+  "cli.status_running": "Resolver: running (pid {pid})",
+  "cli.status_stopped": "Resolver: not running",
+  "cli.status_stale": "Resolver: not running, but rules from an unclean shutdown may remain. Run --repair.",
+  "cli.status_listen": "Listening on: {listen}",
+  "cli.status_upstreams": "Forwarding to: {servers}",
+  "cli.status_rules": "Claimed namespaces: {count} via {mechanism}",
+  "cli.status_domains": "Domains: {enabled} enabled of {total}",
+  "cli.repair_removed": "Removed {count} leftover rules.",
+  "cli.repair_nothing": "Nothing to repair.",
+
+  "domain.error_empty": "Enter a domain name.",
+  "domain.error_wildcard_bare": "A bare * would capture every name on this machine. Use *.example.test.",
+  "domain.error_wildcard_position": "* is only allowed as the leftmost label, as in *.example.test.",
+  "domain.error_too_long": "A domain name cannot exceed {limit} characters.",
+  "domain.error_empty_label": "A domain name cannot contain an empty part.",
+  "domain.error_label_too_long": "'{label}' exceeds {limit} characters.",
+  "domain.error_label_hyphen": "'{label}' cannot start or end with a hyphen.",
+  "domain.error_label_chars": "'{label}' contains characters that are not allowed: {chars}",
+  "domain.error_single_label": "Add a suffix, for example .test -- a single-label name never reaches a DNS server.",
+  "domain.warn_mdns": ".local is reserved for mDNS and is resolved without asking any DNS server. Consider {suggested}.",
+  "domain.warn_hsts_tld": ".{tld} is on the browser HSTS preload list, so http:// is forced to https://.",
+  "domain.warn_wildcard_apex": "A wildcard does not cover {apex} itself. Add it as a separate domain if you need it.",
+
   "error.no_user": "Cannot determine the current user account.",
   "error.icacls_failed": "Could not tighten permissions on {path}: {error}",
-  "error.icacls_returned": "icacls returned {code} on {path}: {output}"
+  "error.icacls_returned": "icacls returned {code} on {path}: {output}",
+  "error.bind_in_use": "Port {port} on {address} is already in use. Stop whatever holds it, or set a different listen address in settings.",
+  "error.bind_denied": "Permission denied binding {address}:{port}. Run the resolver elevated.",
+  "error.bind_failed": "Could not listen on {address}:{port}: {error}",
+  "error.policy_failed": "Names were not registered with the system resolver: {error}",
+  "error.repair_failed": "Could not remove the leftover rules: {error}"
 }
