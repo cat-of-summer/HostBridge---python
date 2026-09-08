@@ -85,3 +85,22 @@ def fake_spawn(monkeypatch):
 
     install.calls = calls
     return install
+
+
+@pytest.fixture(scope="session")
+def qt_app():
+    """One QApplication for the whole run, offscreen.
+
+    Session-scoped because constructing a second QApplication in a process aborts it, and
+    offscreen because the container has no display -- which is also how CI runs.
+    """
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    try:
+        from PySide6.QtWidgets import QApplication
+    except ImportError as exc:
+        pytest.skip(f"PySide6 is unusable here: {exc}")
+
+    application = QApplication.instance() or QApplication([])
+    yield application

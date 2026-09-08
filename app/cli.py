@@ -103,6 +103,9 @@ def dispatch(argv: list[str]) -> int:
 
         return console_main()
 
+    if role is Role.GUI:
+        return _gui()
+
     if role is Role.STATUS:
         return _status()
 
@@ -115,6 +118,20 @@ def dispatch(argv: list[str]) -> int:
     # Roles are wired up milestone by milestone; each arrives with its own module rather
     # than as a branch bolted onto this function.
     return _not_yet(role)
+
+
+def _gui() -> int:
+    """Open the desktop window.
+
+    Imported here rather than at module scope: PySide6 costs a noticeable fraction of a
+    second to import, and --version, --status and the daemon must not pay for it.
+    """
+    try:
+        from ui.app import run
+    except ImportError as exc:
+        emit(t("error.gui_unavailable", error=exc), error=True)
+        return 4
+    return run()
 
 
 def _status() -> int:

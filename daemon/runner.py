@@ -24,6 +24,7 @@ import socket
 
 from core import log
 from core.config import DaemonSettings
+from core.events import Bus
 from core.match import Zone
 from core.paths import machine_home
 from core.store import DomainStore
@@ -52,6 +53,8 @@ class Runner:
         settings: DaemonSettings | None = None,
         store: DomainStore | None = None,
         policy: Policy | None = None,
+        *,
+        control_enabled: bool = True,
     ) -> None:
         self.settings = settings or DaemonSettings.load()
         self.store = store or DomainStore()
@@ -65,6 +68,10 @@ class Runner:
 
         self.traefik_ok = True
         """Starts optimistic so the first failure is what gets logged, not the first poll."""
+
+        self.control_enabled = control_enabled
+        self.api = None
+        self.bus = Bus()
 
         self._stop = asyncio.Event()
         self._sockets: tuple[list[socket.socket], list[socket.socket]] = ([], [])
@@ -146,6 +153,12 @@ class Runner:
         await self.server.start()
 
         self.apply_policy(zone, state)
+
+        if self.control_enabled:
+            from daemon.api import ControlApi
+
+            self.api = ControlApi(self, self.bus)
+            await self.api.start()
 
     def apply_policy(self, zone: Zone, state: netstate.NetState) -> None:
         namespaces = list(zone.namespaces())
@@ -294,6 +307,10 @@ class Runner:
             await asyncio.sleep(HEARTBEAT_SECONDS)
 
     async def stop(self) -> None:
+        if self.api is not None:
+            await self.api.stop()
+            self.api = None
+
         if self.server is not None:
             await self.server.stop()
             self.server = None

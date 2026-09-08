@@ -22,10 +22,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from client.api import Bridge, BridgeConflict, BridgeError
 from core.match import validate
-from core.model import SOURCE_MANUAL, Domain
-from core.store import DomainStore, StoreLocked, StoreReadOnly
-from daemon import status as status_module
+from core.model import Domain
+from core.store import DomainStore
 from ui.i18n import t
 from ui.screen import (
     BOLD,
@@ -58,13 +58,20 @@ class View:
     """Everything the screen draws, gathered in one read."""
 
     domains: list[Domain]
-    status: status_module.Status
+    online: bool
+    claimed: int = 0
+    stale: bool = False
 
     @classmethod
-    def load(cls, store: DomainStore) -> View:
-        snapshot = store.load()
-        domains = sorted(snapshot.domains, key=lambda d: d.name)
-        return cls(domains=domains, status=status_module.collect(store))
+    def load(cls, bridge: Bridge) -> View:
+        snapshot = bridge.snapshot()
+        status = snapshot.status or {}
+        return cls(
+            domains=sorted(snapshot.domains, key=lambda d: d.name),
+            online=snapshot.online,
+            claimed=len(status.get("claimed") or ()),
+            stale=bool(status.get("stale")),
+        )
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -73,20 +80,20 @@ def _truncate(text: str, limit: int) -> str:
     return text[: limit - 1] + "…"
 
 
-def _status_parts(status: status_module.Status) -> tuple[str, str]:
+def _status_parts(view: View) -> tuple[str, str]:
     """The status as (colour, text), so the caller can measure it before painting."""
-    if status.running:
-        return GREEN, t("console.status_running", count=len(status.claimed))
-    if status.stale:
+    if view.online:
+        return GREEN, t("console.status_running", count=view.claimed)
+    if view.stale:
         return YELLOW, t("console.status_stale")
     return DIM, t("console.status_stopped")
 
 
-def _header(status: status_module.Status, columns: int) -> str:
+def _header(view: View, columns: int) -> str:
     from core.version import __version__
 
     title = f"HostBridge {__version__}"
-    colour, text = _status_parts(status)
+    colour, text = _status_parts(view)
 
     # The header is measured like every other line: it wraps just as readily, and a wrapped
     # header throws off the cursor-up count for the whole screen below it.
@@ -102,7 +109,7 @@ def _header(status: status_module.Status, columns: int) -> str:
 def render(view: View, cursor: int, note: str = "", *, columns: int | None = None) -> list[str]:
     """The whole screen as a list of lines. Pure, so the tests compare it directly."""
     columns = columns or terminal_width()
-    lines = [_header(view.status, columns), ""]
+    lines = [_header(view, columns), ""]
 
     if not view.domains:
         lines.append(f"  {DIM}{_truncate(t('console.empty'), columns - 2)}{RESET}")
@@ -182,7 +189,7 @@ def _describe(issue) -> str:
 # ---- actions -----------------------------------------------------------------------
 
 
-def add_domain(store: DomainStore) -> str:
+def add_domain(bridge: Bridge) -> str:
     """Prompt for a name and an address. Returns the note to show on the screen."""
     raw = ask_line(t("console.prompt_name"))
     if not raw:
@@ -202,46 +209,45 @@ def add_domain(store: DomainStore) -> str:
         return t("console.cancelled")
 
     try:
-        store.add(Domain(name=checked.name, address=address, source=SOURCE_MANUAL))
-    except ValueError as exc:
-        return "!" + t("console.duplicate", name=str(exc))
-    except (StoreReadOnly, StoreLocked) as exc:
+        bridge.add(checked.name, address)
+    except BridgeConflict as exc:
+        return "!" + t("console.duplicate", name=exc.name)
+    except BridgeError as exc:
         return "!" + t("console.store_busy", error=exc)
     return t("console.added", name=checked.name)
 
 
-def edit_domain(store: DomainStore, domain: Domain) -> str:
+def edit_domain(bridge: Bridge, domain: Domain) -> str:
     address = ask_line(t("console.prompt_address"), domain.address)
     if not address:
         return t("console.cancelled")
     if address == domain.address:
         return t("console.cancelled")
     try:
-        store.update(domain.id, address=address)
-    except (StoreReadOnly, StoreLocked) as exc:
+        bridge.update(domain.id, address=address)
+    except BridgeError as exc:
         return "!" + t("console.store_busy", error=exc)
     return t("console.saved", name=domain.name)
 
 
-def delete_domain(store: DomainStore, domain: Domain) -> str:
+def delete_domain(bridge: Bridge, domain: Domain) -> str:
     if not ask_yes(t("console.confirm_delete", name=domain.name)):
         return t("console.cancelled")
     try:
-        store.delete(domain.id)
-    except (StoreReadOnly, StoreLocked) as exc:
+        bridge.delete(domain.id)
+    except BridgeError as exc:
         return "!" + t("console.store_busy", error=exc)
     return t("console.deleted", name=domain.name)
 
 
-def toggle_domain(store: DomainStore, domain: Domain) -> str:
+def toggle_domain(bridge: Bridge, domain: Domain) -> str:
     try:
-        updated = store.toggle(domain.id)
-    except (StoreReadOnly, StoreLocked) as exc:
+        answer = bridge.toggle(domain.id)
+    except BridgeError as exc:
         return "!" + t("console.store_busy", error=exc)
-    if updated is None:
-        return ""
-    key = "console.toggled_on" if updated.enabled else "console.toggled_off"
-    return t(key, name=updated.name)
+    enabled = bool((answer.get("domain") or {}).get("enabled", not domain.enabled))
+    key = "console.toggled_on" if enabled else "console.toggled_off"
+    return t(key, name=domain.name)
 
 
 # ---- the loop ----------------------------------------------------------------------
@@ -250,6 +256,7 @@ def toggle_domain(store: DomainStore, domain: Domain) -> str:
 def run(
     store: DomainStore | None = None,
     *,
+    bridge: Bridge | None = None,
     keys: Callable[[], str] = read_key,
     surface: Surface | None = None,
 ) -> int:
@@ -257,11 +264,11 @@ def run(
 
     ``keys`` is injected so a test can drive the whole loop with a scripted sequence.
     """
-    store = store or DomainStore()
+    bridge = bridge or Bridge.connect(store)
     surface = surface or Surface()
     enable_ansi()
 
-    view = View.load(store)
+    view = View.load(bridge)
     cursor = 0
     note = ""
 
@@ -284,7 +291,7 @@ def run(
                     cursor = (cursor + 1) % len(view.domains)
                 continue
             if key == "r":
-                view = View.load(store)
+                view = View.load(bridge)
                 note = t("console.refreshed")
                 continue
 
@@ -292,8 +299,8 @@ def run(
                 # Out of the repainting block: input() writes its own prompt and scrolls,
                 # which would leave the surface's height arithmetic pointing at nothing.
                 surface.reset()
-                note = add_domain(store)
-                view = View.load(store)
+                note = add_domain(bridge)
+                view = View.load(bridge)
                 continue
 
             if not view.domains:
@@ -301,32 +308,33 @@ def run(
             current = view.domains[cursor]
 
             if key == "space":
-                note = toggle_domain(store, current)
-                view = View.load(store)
+                note = toggle_domain(bridge, current)
+                view = View.load(bridge)
             elif key == "e":
                 surface.reset()
-                note = edit_domain(store, current)
-                view = View.load(store)
+                note = edit_domain(bridge, current)
+                view = View.load(bridge)
             elif key in ("d", "del"):
                 surface.reset()
-                note = delete_domain(store, current)
-                view = View.load(store)
+                note = delete_domain(bridge, current)
+                view = View.load(bridge)
     except KeyboardInterrupt:
         print()
         return 0
 
 
-def show_plain(store: DomainStore | None = None) -> int:
+def show_plain(store: DomainStore | None = None, bridge: Bridge | None = None) -> int:
     """The non-interactive fallback: print the state and return, never blocking on input.
 
     Reached when stdin or stdout is redirected. Without this branch a piped or CI-invoked
     run would hang forever waiting for a keypress nobody can send.
     """
     from app.output import emit
+    from daemon.status import describe
 
-    store = store or DomainStore()
-    view = View.load(store)
-    for line in status_module.describe(view.status):
+    bridge = bridge or Bridge.connect(store)
+    view = View.load(bridge)
+    for line in describe():
         emit(line)
     if view.domains:
         emit("")
@@ -336,5 +344,6 @@ def show_plain(store: DomainStore | None = None) -> int:
     return 0
 
 
-def main(store: DomainStore | None = None) -> int:
-    return run(store) if interactive() else show_plain(store)
+def main(store: DomainStore | None = None, bridge: Bridge | None = None) -> int:
+    bridge = bridge or Bridge.connect(store)
+    return run(bridge=bridge) if interactive() else show_plain(bridge=bridge)

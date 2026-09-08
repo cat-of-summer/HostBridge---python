@@ -11,10 +11,16 @@ import sys
 
 import pytest
 
+from client.api import Bridge, LocalBackend
 from core.model import SOURCE_MANUAL, SOURCE_TRAEFIK, Domain
 from core.store import DomainStore
 from ui import console, screen
 from ui.console import View, render
+
+
+def _bridge(store: DomainStore) -> Bridge:
+    """A bridge with no daemon behind it, which is what the console falls back to."""
+    return Bridge(LocalBackend(store))
 
 
 class FakeSurface:
@@ -63,7 +69,7 @@ def _keys(sequence):
 
 
 def test_the_cursor_marks_the_selected_row(store):
-    lines = _plain(render(View.load(store), cursor=0, columns=100))
+    lines = _plain(render(View.load(_bridge(store)), cursor=0, columns=100))
     body = [line for line in lines if "etm39.ru" in line or "api.shop.test" in line]
     assert body[0].lstrip().startswith("▸"), "the first row is selected"
     assert not body[1].lstrip().startswith("▸")
@@ -73,21 +79,21 @@ def test_enabled_and_disabled_use_different_marks(store):
     target = store.load().domains[0]
     store.toggle(target.id, enabled=False)
 
-    lines = _plain(render(View.load(store), cursor=0, columns=100))
+    lines = _plain(render(View.load(_bridge(store)), cursor=0, columns=100))
     row = next(line for line in lines if target.name in line)
     assert "○" in row
     assert "●" not in row
 
 
 def test_the_source_column_is_shown_on_a_wide_terminal(store):
-    lines = _plain(render(View.load(store), cursor=0, columns=100))
+    lines = _plain(render(View.load(_bridge(store)), cursor=0, columns=100))
     assert any("traefik" in line for line in lines)
     assert any("manual" in line for line in lines)
 
 
 def test_a_narrow_terminal_drops_the_columns_rather_than_wrapping(store):
     """A line longer than the terminal wraps, and that breaks the cursor-up arithmetic."""
-    lines = render(View.load(store), cursor=0, columns=40)
+    lines = render(View.load(_bridge(store)), cursor=0, columns=40)
     for line in _plain(lines):
         assert len(line) <= 40, f"line would wrap: {line!r}"
 
@@ -95,29 +101,31 @@ def test_a_narrow_terminal_drops_the_columns_rather_than_wrapping(store):
 def test_a_long_name_is_truncated_not_wrapped():
     store = DomainStore()
     store.add(Domain(name="a" * 80 + ".test"))
-    for line in _plain(render(View.load(store), cursor=0, columns=60)):
+    for line in _plain(render(View.load(_bridge(store)), cursor=0, columns=60)):
         assert len(line) <= 60
 
 
 def test_an_empty_store_says_so_instead_of_showing_nothing():
-    lines = _plain(render(View.load(DomainStore()), cursor=0, columns=100))
+    lines = _plain(render(View.load(_bridge(DomainStore())), cursor=0, columns=100))
     assert any("No domains yet" in line for line in lines)
 
 
 def test_a_note_is_rendered(store):
-    lines = _plain(render(View.load(store), cursor=0, note="etm39.ru on", columns=100))
+    lines = _plain(render(View.load(_bridge(store)), cursor=0, note="etm39.ru on", columns=100))
     assert any("etm39.ru on" in line for line in lines)
 
 
 def test_an_error_note_loses_its_marker(store):
-    lines = _plain(render(View.load(store), cursor=0, note="!something broke", columns=100))
+    lines = _plain(
+        render(View.load(_bridge(store)), cursor=0, note="!something broke", columns=100)
+    )
     assert any(line.strip() == "something broke" for line in lines)
 
 
 def test_the_frame_height_is_stable_so_the_repaint_lands(store):
     """draw() moves the cursor up by the previous height; a changing height would drift."""
-    first = render(View.load(store), cursor=0, columns=100)
-    second = render(View.load(store), cursor=1, note="something", columns=100)
+    first = render(View.load(_bridge(store)), cursor=0, columns=100)
+    second = render(View.load(_bridge(store)), cursor=1, note="something", columns=100)
     assert len(first) == len(second)
 
 

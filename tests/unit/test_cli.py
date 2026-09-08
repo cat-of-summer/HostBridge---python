@@ -14,11 +14,24 @@ def test_version_prints_and_exits_zero(capsys):
     assert capsys.readouterr().out.strip() == f"hostbridge {__version__}"
 
 
-def test_no_arguments_selects_the_gui_role(capsys):
-    # Not implemented yet, but it must be the GUI that is reported as missing -- a default
-    # that silently ran the daemon would prompt for elevation on an ordinary launch.
-    dispatch([])
-    assert Role.GUI.value in capsys.readouterr().err
+def test_no_arguments_selects_the_gui_role_without_a_terminal():
+    """Under pytest stdin is not a terminal, which is the windowed build's situation too.
+
+    The role is asserted rather than dispatched: dispatching it now really would open the
+    window and hand control to Qt, and the test would never return.
+    """
+    from app.cli import _build_parser, _role_of
+
+    assert _role_of(_build_parser().parse_args([])) is Role.GUI
+
+
+def test_a_terminal_selects_the_console_role(monkeypatch):
+    """A double-clicked hostbridge-cli.exe must open the screen, not print and vanish."""
+    from app.cli import _build_parser, _role_of
+    from ui import screen
+
+    monkeypatch.setattr(screen, "interactive", lambda: True)
+    assert _role_of(_build_parser().parse_args([])) is Role.CONSOLE
 
 
 def test_role_flags_are_mutually_exclusive():
@@ -70,9 +83,15 @@ class TestWindowedBuildHasNoConsole:
         yield
         monkeypatch.setattr(output, "_has_console", None)
 
-    def test_the_default_role_reports_instead_of_crashing(self):
-        assert dispatch([]) == 4
-        assert self.shown and Role.GUI.value in self.shown[0][0]
+    def test_an_unimplemented_role_reports_instead_of_crashing(self):
+        """Uses a role that is still a stub on purpose.
+
+        The default role is the GUI now, and dispatching that really would open a window and
+        hand control to Qt -- so this exercises the same reporting path through a role that
+        still returns rather than running.
+        """
+        assert dispatch(["--install-service"]) == 4
+        assert self.shown and Role.INSTALL_SERVICE.value in self.shown[0][0]
         assert self.shown[0][1] is True
 
     def test_version_reaches_the_user(self):
