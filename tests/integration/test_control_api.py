@@ -111,7 +111,10 @@ class Harness:
     # ---- raw requests -------------------------------------------------------------
 
     def request(self, method: str, path: str, *, headers=None, body=None):
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        # Generous on purpose. Five seconds is ample against a loopback daemon but not
+        # against a CI runner under load, and a timeout here would look like a server bug
+        # rather than the scheduling delay it is.
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=20)
         try:
             payload = json.dumps(body).encode() if body is not None else None
             sent = {
