@@ -3,6 +3,8 @@
 
 ## Папки
 
+- [golden](golden/)
+- [integration](integration/)
 - [unit](unit/)
 
 ## Файлы
