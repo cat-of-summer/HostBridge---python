@@ -302,3 +302,70 @@ def test_reload_without_a_namespace_change_does_not_touch_policy(settings, store
         await runner.stop()
 
     _run(scenario())
+
+
+# ---- Traefik import ---------------------------------------------------------------
+
+
+def test_an_unreachable_traefik_never_empties_the_store(settings, store, monkeypatch):
+    """The flaw in hosts.bat, as a regression test.
+
+    That script treated any exception from the API as "no routers" and deleted every entry
+    it managed, so one HTTP hiccup took the user's domains down for a poll cycle.
+    """
+    from core.model import SOURCE_TRAEFIK, Domain
+    from discover import traefikapi
+
+    store.reconcile(SOURCE_TRAEFIK, [Domain(name="etm39.ru", source=SOURCE_TRAEFIK, owner="r1")])
+    before = [d.name for d in store.load().domains]
+
+    async def _explode(*_args, **_kwargs):
+        raise traefikapi.TraefikUnavailable("connection refused")
+
+    monkeypatch.setattr(traefikapi, "import_domains", _explode)
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+
+    assert _run(runner.poll_traefik()) is False
+    assert [d.name for d in store.load().domains] == before
+    assert runner.traefik_ok is False
+
+
+def test_a_successful_poll_imports_routers(settings, store, monkeypatch):
+    from discover import traefikapi
+    from discover.traefikapi import routers_to_domains
+
+    routers = [
+        {"name": "web@docker", "rule": "Host(`etm39.ru`)", "status": "enabled"},
+        {"name": "api@docker", "rule": "Host(`api.dobroedelo.ru`)", "status": "enabled"},
+    ]
+
+    async def _ok(*_args, **_kwargs):
+        return routers_to_domains(routers)
+
+    monkeypatch.setattr(traefikapi, "import_domains", _ok)
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+
+    assert _run(runner.poll_traefik()) is True
+    assert sorted(d.name for d in store.load().domains) == [
+        "*.dobroedelo.ru",
+        "api.dobroedelo.ru",
+        "etm39.ru",
+        "shop.test",
+    ]
+
+
+def test_an_unchanged_poll_does_not_rewrite_anything(settings, store, monkeypatch):
+    """A ten-second poll must be free when nothing moved."""
+    from discover import traefikapi
+    from discover.traefikapi import routers_to_domains
+
+    routers = [{"name": "web@docker", "rule": "Host(`etm39.ru`)", "status": "enabled"}]
+
+    async def _ok(*_args, **_kwargs):
+        return routers_to_domains(routers)
+
+    monkeypatch.setattr(traefikapi, "import_domains", _ok)
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+
+    assert _run(runner.poll_traefik()) is True
+    assert _run(runner.poll_traefik()) is False

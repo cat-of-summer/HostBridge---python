@@ -60,6 +60,9 @@ class Runner:
         self.upstreams: list[str] = []
         self.policy_error: str = ""
 
+        self.traefik_ok = True
+        """Starts optimistic so the first failure is what gets logged, not the first poll."""
+
         self._stop = asyncio.Event()
         self._sockets: tuple[list[socket.socket], list[socket.socket]] = ([], [])
 
@@ -187,19 +190,67 @@ class Runner:
         netstate.write(state)
         self.apply_policy(zone, state)
 
+    # ---- Traefik ---------------------------------------------------------------------
+
+    async def poll_traefik(self) -> bool:
+        """One import pass. Returns whether the store changed.
+
+        The property that matters, and the one ``hosts.bat`` did not have: **an unreachable
+        Traefik is not an empty Traefik.** That script treated any exception as "no routers"
+        and removed every managed entry, so a momentary HTTP hiccup took all the user's
+        domains down for a poll cycle. Here an error leaves the records exactly as they are.
+        """
+        from core.model import SOURCE_TRAEFIK
+        from discover.traefikapi import TraefikUnavailable, import_domains
+
+        try:
+            result = await import_domains(self.settings.traefik_api)
+        except TraefikUnavailable as exc:
+            if self.traefik_ok:
+                log.warn(f"traefik: {exc}")
+            self.traefik_ok = False
+            return False
+
+        if not self.traefik_ok:
+            log.write("traefik: reachable again")
+        self.traefik_ok = True
+
+        outcome = self.store.reconcile(SOURCE_TRAEFIK, result.domains)
+        if not outcome.changed:
+            return False
+
+        log.write(
+            f"traefik: +{len(outcome.added)} ~{len(outcome.updated)} -{len(outcome.removed)}"
+        )
+        self.reload()
+        return True
+
+    async def _traefik_loop(self) -> None:
+        interval = max(1, self.settings.traefik_poll_seconds)
+        while not self._stop.is_set():
+            try:
+                await self.poll_traefik()
+            except Exception as exc:  # noqa: BLE001 - a poll must never kill the daemon
+                log.error(f"traefik: poll failed: {exc!r}")
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), interval)
+
     # ---- stop ----------------------------------------------------------------------
 
     def request_stop(self) -> None:
         self._stop.set()
 
     async def serve_forever(self) -> None:
-        heartbeat = asyncio.get_running_loop().create_task(self._heartbeat())
+        loop = asyncio.get_running_loop()
+        tasks = [loop.create_task(self._heartbeat())]
+        if self.settings.traefik_enabled:
+            tasks.append(loop.create_task(self._traefik_loop()))
         try:
             await self._stop.wait()
         finally:
-            heartbeat.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await heartbeat
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _heartbeat(self) -> None:
         while True:

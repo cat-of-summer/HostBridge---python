@@ -335,6 +335,7 @@ class DomainStore:
                     for key, value in (
                         ("name", candidate.name),
                         ("address", candidate.address),
+                        ("note", candidate.note),
                     )
                     if key not in current.pinned_fields and getattr(current, key) != value
                 }
