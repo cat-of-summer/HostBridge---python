@@ -17,6 +17,7 @@
 - [test_output.py](test_output.py.md)
 - [test_paths.py](test_paths.py.md)
 - [test_query.py](test_query.py.md)
+- [test_reachability.py](test_reachability.py.md)
 - [test_run.py](test_run.py.md)
 - [test_runner.py](test_runner.py.md)
 - [test_secure.py](test_secure.py.md)

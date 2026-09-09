@@ -7,6 +7,7 @@
 - [dnsservers.py](dnsservers.py.md)
 - [elevate.py](elevate.py.md)
 - [nrpt_win.py](nrpt_win.py.md)
+- [reachability.py](reachability.py.md)
 - [resolved_linux.py](resolved_linux.py.md)
 - [run.py](run.py.md)
 - [secure.py](secure.py.md)
