@@ -24,6 +24,11 @@ fi
 
 echo "Python: $("$python" --version)"
 
+# Before the editable install, so the package metadata carries the tag too, and long
+# before PyInstaller collects core/version.py into the binary. A build with no release tag
+# -- a branch push, a pull request, a local run -- leaves every file alone.
+"$python" build/version_stamp.py
+
 scratch="$root/build/__pycache__"
 export PYTHONPYCACHEPREFIX="$scratch"
 

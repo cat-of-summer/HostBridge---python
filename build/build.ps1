@@ -33,6 +33,12 @@ if (-not $Python) { throw "Python not found. Install Python 3.10+ and retry." }
 
 Write-Output "Python: $(& $Python --version)"
 
+# Before the editable install, so the package metadata carries the tag too, and long
+# before PyInstaller collects core/version.py into the binary. A build with no release tag
+# -- a branch push, a pull request, a local run -- leaves every file alone.
+& $Python (Join-Path $root "build" "version_stamp.py")
+if ($LASTEXITCODE -ne 0) { throw "stamping the version failed" }
+
 $scratch = Join-Path $root "build\__pycache__"
 $env:PYTHONPYCACHEPREFIX = $scratch
 
