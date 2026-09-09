@@ -64,6 +64,13 @@ if (-not $artifact) {
 $collected = Join-Path "dist" $artifact
 if (-not (Test-Path $collected)) { throw "PyInstaller produced no $collected" }
 
+# Qt has to be genuinely collected. Without the Qt system libraries PyInstaller cannot
+# introspect PySide6, prints a warning rather than failing, and ships a bundle with no
+# platform plugin -- a build that looks fine and a GUI that cannot start.
+if (-not (Get-ChildItem $collected -Recurse -Directory -Filter "platforms" -ErrorAction SilentlyContinue)) {
+    throw "The bundle contains no Qt platform plugin, so its GUI cannot start."
+}
+
 $archive = "$collected.zip"
 Compress-Archive -Path $collected -DestinationPath $archive -Force
 # No checksum file is written: the release pipeline records its own digest for every

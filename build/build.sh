@@ -52,6 +52,20 @@ print(os.environ.get('HOSTBRIDGE_ARTIFACT_NAME') or f'hostbridge-{name}-{arch}')
 
 [ -d "dist/$artifact" ] || { echo "PyInstaller produced no dist/$artifact" >&2; exit 1; }
 
+# Qt has to be genuinely collected, and this check exists because the failure it catches is
+# silent. On a machine without the Qt system libraries PyInstaller cannot introspect
+# PySide6: it prints "failed to obtain Qt library info" as a *warning*, exits 0, and ships
+# an archive with no platform plugin in it. The build looks fine and the GUI cannot start.
+# Measured on a bare python:3.12-slim: 104 files and zero plugins, against 333 files and ten
+# plugins once libegl1, libglib2.0-0, libxkbcommon0, libdbus-1-3, libfontconfig1 and
+# libgssapi-krb5-2 are installed.
+if ! find "dist/$artifact" -type d -name platforms -print -quit | grep -q .; then
+    echo "The bundle contains no Qt platform plugin, so its GUI cannot start." >&2
+    echo "On Linux install: libegl1 libgl1 libglib2.0-0 libxkbcommon0 libdbus-1-3 \\" >&2
+    echo "                  libfontconfig1 libgssapi-krb5-2" >&2
+    exit 1
+fi
+
 # The release step stages assets behind `[ -f "$f" ]`, so the collected directory has to
 # become a single file.
 #
