@@ -6,6 +6,7 @@
 - [desktop_linux.py](desktop_linux.py.md)
 - [dnsflush.py](dnsflush.py.md)
 - [dnsservers.py](dnsservers.py.md)
+- [doh.py](doh.py.md)
 - [elevate.py](elevate.py.md)
 - [nrpt_win.py](nrpt_win.py.md)
 - [reachability.py](reachability.py.md)
