@@ -93,6 +93,19 @@ class DaemonSettings:
     traefik_api: str = "http://127.0.0.1:8080"
     traefik_poll_seconds: int = 10
 
+    bypass_dns_filter: bool = True
+    """Listen on an extra address when loopback's port 53 turns out to be filtered.
+
+    A VPN with DNS-leak protection blocks port 53 for every destination, loopback included,
+    while permitting its own tunnel interface -- so binding the tunnel's local address as
+    well is what makes the resolver reachable at all. See :mod:`system.reachability`.
+
+    Left switchable because the extra address is not loopback. In the case this is built
+    for it is a point-to-point tunnel address that nothing else can route to, but on a
+    machine where something *else* filters loopback and the default route is the local
+    network, the address chosen would face that network. Set to false to forbid that
+    outright and accept that the domains will not resolve while the filter is up."""
+
     docker_enabled: bool = True
     docker_host: str = ""
     """Empty means "the platform default": the named pipe on Windows, the unix socket
@@ -141,6 +154,9 @@ class DaemonSettings:
                 raw.get("traefik_poll_seconds")
                 if isinstance(raw.get("traefik_poll_seconds"), int)
                 else defaults.traefik_poll_seconds
+            ),
+            bypass_dns_filter=bool(
+                raw.get("bypass_dns_filter", defaults.bypass_dns_filter)
             ),
             docker_enabled=bool(raw.get("docker_enabled", defaults.docker_enabled)),
             docker_host=(

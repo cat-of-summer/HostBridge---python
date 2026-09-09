@@ -14,6 +14,7 @@ than as a failure: the user said no, and telling them something broke would be w
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 
@@ -57,9 +58,17 @@ def start_resolver() -> StartResult:
         current = None
 
     if current is not None and current.supported and current.installed:
+        # A service belongs to the machine, not to this window, so no owner is passed: it
+        # is meant to survive the application closing and to come back after a reboot.
         outcome = run_elevated(["--service-start"], wait=True)
     else:
-        outcome = run_elevated(["--daemon-foreground"], wait=False)
+        # A daemon we start ourselves belongs to us. Telling it our pid is what makes
+        # closing the application put the machine back as it was: the daemon notices we
+        # are gone and shuts down through its ordinary path, removing its rules -- which
+        # also covers this process being killed rather than quitting politely.
+        outcome = run_elevated(
+            ["--daemon-foreground", "--owner-pid", str(os.getpid())], wait=False
+        )
 
     if outcome.cancelled:
         return StartResult.refused()

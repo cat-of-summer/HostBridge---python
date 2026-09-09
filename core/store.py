@@ -54,6 +54,13 @@ class Snapshot:
     read_only: bool = False
     """Set when the file came from a newer build. Mutations raise instead of clobbering."""
 
+    migrated: bool = False
+    """Set when the file on disk was an older schema and had to be upgraded in memory.
+
+    Carried so :meth:`DomainStore.mutate` writes even if the caller changed nothing: the
+    upgrade itself is a change, and it has to reach the disk or it is redone on every read.
+    """
+
     def by_id(self, identifier: str) -> Domain | None:
         return next((d for d in self.domains if d.id == identifier), None)
 
@@ -132,8 +139,9 @@ class DomainStore:
             return Snapshot()
 
         read_only = False
+        migrated = False
         try:
-            payload, _changed = migrate(raw)
+            payload, migrated = migrate(raw)
         except SchemaTooNew as exc:
             log.warn(f"store: {exc}; loading read-only")
             payload, read_only = raw, True
@@ -153,6 +161,7 @@ class DomainStore:
             schema=schema if isinstance(schema, int) else SCHEMA_VERSION,
             updated_at=updated if isinstance(updated, str) else "",
             read_only=read_only,
+            migrated=migrated,
         )
 
     # ---- writing ------------------------------------------------------------------
@@ -190,8 +199,18 @@ class DomainStore:
             snapshot = self.load()
             if snapshot.read_only:
                 raise StoreReadOnly(str(self.path))
+
+            before = [domain.to_dict() for domain in snapshot.domains]
             result = change(snapshot)
-            self._write(snapshot.domains)
+            after = [domain.to_dict() for domain in snapshot.domains]
+
+            # A pass that changed nothing must not write. Every write rotates a backup, and
+            # the Traefik poll runs every ten seconds: writing unconditionally burned all
+            # ten backup slots in under two minutes, so the one thing they exist for -- undoing
+            # a bad reconciliation over a hundred domains -- was gone before anyone noticed.
+            # It also bumped the file's mtime, waking the store watcher for nothing.
+            if before != after or snapshot.migrated:
+                self._write(snapshot.domains)
             return result
 
     def _write(self, domains: Iterable[Domain]) -> None:

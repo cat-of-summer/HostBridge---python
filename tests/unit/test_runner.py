@@ -586,3 +586,206 @@ def test_the_token_file_is_hardened_because_it_is_the_one_real_secret(
 
     _run(scenario())
     assert any(call[1] == str(daemon_file()) for call in no_acl), no_acl
+
+
+# ---- reaching the resolver at all --------------------------------------------------
+
+
+def test_a_filtered_loopback_adds_the_address_the_filter_permits(settings, store, monkeypatch):
+    """The case that made everything look right while nothing resolved.
+
+    A VPN with DNS-leak protection blocks port 53 for every destination, loopback included,
+    and permits its own tunnel interface. Listening on the tunnel's local address as well
+    is what lets a query arrive at all -- and loopback stays first, so the pair works
+    whether the tunnel is up or not.
+    """
+    from system import reachability
+
+    monkeypatch.setattr(
+        reachability, "filtered", lambda address, _port, **_k: address == "127.0.0.1"
+    )
+    monkeypatch.setattr(reachability, "outbound_address", lambda: "172.18.0.1")
+
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+    assert runner.detect_filter_bypass() == ["172.18.0.1"]
+    runner.bypass_listen = ["172.18.0.1"]
+
+    assert runner.listen_addresses()[0] == "127.0.0.1", "loopback must stay the first server"
+    assert "172.18.0.1" in runner.listen_addresses()
+    assert runner.filtered_primary is True
+
+
+def test_an_unfiltered_machine_binds_nothing_extra(settings, store, monkeypatch):
+    """The ordinary case: no VPN, no workaround, no extra listener facing anywhere."""
+    from system import reachability
+
+    monkeypatch.setattr(reachability, "filtered", lambda *_a, **_k: False)
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+
+    assert runner.detect_filter_bypass() == []
+    assert runner.filtered_primary is False
+    assert runner.listen_addresses() == ["127.0.0.1"]
+
+
+def test_the_workaround_can_be_switched_off(settings, store, monkeypatch):
+    """The extra address is not loopback, so refusing it outright has to be possible."""
+    from system import reachability
+
+    monkeypatch.setattr(
+        reachability, "filtered", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("probed"))
+    )
+    settings.bypass_dns_filter = False
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+    assert runner.detect_filter_bypass() == []
+
+
+def test_the_extra_address_never_becomes_its_own_upstream(settings, store, monkeypatch):
+    """Otherwise the resolver would forward to itself and every query would hang."""
+    from system import reachability
+
+    monkeypatch.setattr(
+        reachability, "filtered", lambda address, _port, **_k: address == "127.0.0.1"
+    )
+    monkeypatch.setattr(reachability, "outbound_address", lambda: "172.18.0.1")
+
+    settings.upstreams = ["172.18.0.1", "8.8.8.8"]
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+
+    # Exercised without binding: the tunnel address does not exist on a build machine, and
+    # what is under test is the ordering -- the bypass address must be known before the
+    # upstreams are sanitised, or the resolver would list itself as its own upstream.
+    runner.bypass_listen = runner.detect_filter_bypass()
+    assert runner.bypass_listen == ["172.18.0.1"]
+    assert runner.capture_upstreams() == ["8.8.8.8"]
+
+
+# ---- belonging to the application --------------------------------------------------
+
+
+def test_the_daemon_shuts_itself_down_when_its_owner_is_gone(settings, store, monkeypatch):
+    """Closing the application must put the machine back as it was.
+
+    Through the ordinary stop path, so the rules are removed and the cache flushed -- and
+    it covers the window being killed rather than quitting politely, which no menu item
+    can.
+    """
+    import daemon.runner as runner_module
+
+    policy = RecordingPolicy()
+    runner = Runner(
+        settings=settings, store=store, policy=policy, control_enabled=False, owner_pid=4242
+    )
+    monkeypatch.setattr(runner_module, "OWNER_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(runner_module.netstate, "pid_alive", lambda pid: pid != 4242)
+
+    async def scenario():
+        await runner.start()
+        await asyncio.wait_for(runner.serve_forever(), 5)
+        await runner.stop()
+
+    _run(scenario())
+    assert policy.removed == [(".dobroedelo.ru", "shop.test")], "rules must be taken back down"
+    assert netstate.read() is None
+
+
+def test_a_daemon_with_no_owner_keeps_running(settings, store, monkeypatch):
+    """A service belongs to the machine and must outlive every window."""
+    import daemon.runner as runner_module
+
+    monkeypatch.setattr(runner_module, "OWNER_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(runner_module.netstate, "pid_alive", lambda _pid: False)
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy(), control_enabled=False)
+
+    async def scenario():
+        await runner.start()
+        task = asyncio.get_running_loop().create_task(runner.serve_forever())
+        await asyncio.sleep(0.3)
+        still_running = not task.done()
+        runner.request_stop()
+        await task
+        await runner.stop()
+        return still_running
+
+    assert _run(scenario()) is True
+
+
+def test_a_living_owner_does_not_stop_anything(settings, store, monkeypatch):
+    import daemon.runner as runner_module
+
+    monkeypatch.setattr(runner_module, "OWNER_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(runner_module.netstate, "pid_alive", lambda _pid: True)
+    runner = Runner(
+        settings=settings, store=store, policy=RecordingPolicy(), control_enabled=False,
+        owner_pid=4242,
+    )
+
+    async def scenario():
+        await runner.start()
+        task = asyncio.get_running_loop().create_task(runner.serve_forever())
+        await asyncio.sleep(0.3)
+        still_running = not task.done()
+        runner.request_stop()
+        await task
+        await runner.stop()
+        return still_running
+
+    assert _run(scenario()) is True
+
+
+# ---- the log view's source ---------------------------------------------------------
+
+
+def test_log_lines_reach_the_event_stream(settings, store):
+    """The window's log view had no source at all.
+
+    Nothing published ``kind="log"``, so it showed the interface's own start-up messages
+    and then sat there looking frozen while the daemon worked perfectly. This is the wire
+    that feeds it.
+    """
+    from core import log as log_module
+
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+
+    async def scenario():
+        await runner.start()
+        log_module.warn("something worth seeing")
+        seen = [e.to_dict() for e in runner.bus.history() if e.kind == "log"]
+        await runner.stop()
+        return seen
+
+    seen = _run(scenario())
+    assert any(e["message"] == "something worth seeing" and e["level"] == "warn" for e in seen)
+
+
+def test_the_sink_is_detached_on_shutdown(settings, store):
+    """A daemon that stopped must not keep a dead bus wired into the process-wide logger."""
+    from core import log as log_module
+
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+
+    async def scenario():
+        await runner.start()
+        await runner.stop()
+
+    _run(scenario())
+    before = len(tuple(runner.bus.history()))
+    log_module.write("after the daemon is gone")
+    assert len(tuple(runner.bus.history())) == before
+
+
+def test_a_sink_that_throws_does_not_lose_the_line(tmp_path):
+    """Logging never raises: a daemon dying over a lost diagnostic line is the worse bug."""
+    from core import log as log_module
+
+    def _bad(_level, _message):
+        raise RuntimeError("subscriber is broken")
+
+    log_module.add_sink(_bad)
+    try:
+        log_module.write("still written")
+    finally:
+        log_module.remove_sink(_bad)
+
+    from core.paths import log_file
+
+    assert "still written" in log_file().read_text(encoding="utf-8")

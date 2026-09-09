@@ -327,6 +327,8 @@ class ControlApi:
             "upstreams": self.runner.upstreams,
             "claimed": list(self.runner.applied.namespaces),
             "policy_error": self.runner.policy_error,
+            "filtered_primary": self.runner.filtered_primary,
+            "bypass_listen": list(self.runner.bypass_listen),
             "traefik_ok": self.runner.traefik_ok,
             "docker_ok": self.runner.docker_ok,
             "domains_total": status.total,

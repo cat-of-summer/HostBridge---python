@@ -44,6 +44,10 @@ HEARTBEAT_SECONDS = 0.2
 #: How often the store file is checked for an edit made by another process.
 STORE_POLL_SECONDS = 1.0
 
+#: How often the owning process is checked. Two seconds is imperceptible on the way out
+#: and costs one cheap handle query.
+OWNER_POLL_SECONDS = 2.0
+
 
 class Runner:
     """Owns the sockets, the resolver and the applied policy for one daemon run."""
@@ -55,6 +59,7 @@ class Runner:
         policy: Policy | None = None,
         *,
         control_enabled: bool = True,
+        owner_pid: int = 0,
     ) -> None:
         self.settings = settings or DaemonSettings.load()
         self.store = store or DomainStore()
@@ -66,6 +71,12 @@ class Runner:
         self.upstreams: list[str] = []
         self.policy_error: str = ""
 
+        self.bypass_listen: list[str] = []
+        """Extra addresses bound because loopback's DNS port is filtered. Usually empty."""
+
+        self.filtered_primary = False
+        """Set when a packet filter forbids reaching our main listen address."""
+
         self.traefik_ok = True
         """Starts optimistic so the first failure is what gets logged, not the first poll."""
 
@@ -75,6 +86,16 @@ class Runner:
         self.control_enabled = control_enabled
         self.api = None
         self.bus = Bus()
+
+        self.owner_pid = owner_pid
+        """The process this daemon belongs to, or 0 when it belongs to nobody.
+
+        Set when the window started us: closing the application must put the machine back
+        as it was, and a resolver left running with rules applied and no interface to
+        manage it is exactly the orphan ``--repair`` exists to mop up. Watching the owner
+        turns that into an ordinary shutdown instead. A service passes 0 -- it outlives
+        every window by design.
+        """
 
         self._stop = asyncio.Event()
         self._sockets: tuple[list[socket.socket], list[socket.socket]] = ([], [])
@@ -86,7 +107,35 @@ class Runner:
         if self.settings.listen_ipv6:
             addresses.append("::1")
         addresses.extend(self.settings.extra_listen)
+        addresses.extend(self.bypass_listen)
         return list(dict.fromkeys(addresses))
+
+    def detect_filter_bypass(self) -> list[str]:
+        """Find an address a DNS-blocking VPN filter would let a query through on.
+
+        Loopback stays first in the list either way. The policy hands every listen address
+        to the resolver table as a name server, so a client tries them in turn -- which
+        means the pair keeps working whether the tunnel is up or down, instead of trading
+        one broken state for another.
+        """
+        if not self.settings.bypass_dns_filter:
+            return []
+
+        from system import reachability
+
+        primary = self.settings.listen_address
+        port = self.settings.listen_port
+        self.filtered_primary = reachability.filtered(primary, port)
+        if not self.filtered_primary:
+            return []
+
+        extra = reachability.bypass_for(primary, port)
+        if not extra:
+            log.warn(t("error.dns_filtered", address=primary, port=port))
+            return []
+
+        log.warn(t("error.dns_filtered_bypass", address=primary, port=port, bypass=extra))
+        return [extra]
 
     # ---- start ---------------------------------------------------------------------
 
@@ -132,6 +181,9 @@ class Runner:
             secure.harden_dir(machine_home())
 
         self.clear_leftovers()
+        # Before the upstreams are captured, so an address we are about to listen on cannot
+        # also end up in the upstream list and turn the resolver into its own client.
+        self.bypass_listen = self.detect_filter_bypass()
         self.upstreams = self.capture_upstreams()
 
         zone = self.build_zone()
@@ -162,6 +214,8 @@ class Runner:
 
             self.api = ControlApi(self, self.bus)
             await self.api.start()
+            # Only once the API exists, because a line published to nobody is just work.
+            log.add_sink(self._publish_log)
 
     def apply_policy(self, zone: Zone, state: netstate.NetState) -> None:
         namespaces = list(zone.namespaces())
@@ -208,6 +262,15 @@ class Runner:
         state.intent = sorted(set(state.intent) | set(zone.namespaces()))
         netstate.write(state)
         self.apply_policy(zone, state)
+
+    def _publish_log(self, level: str, message: str) -> None:
+        """Put every log line on the event stream, so the window's log view has a source.
+
+        It had none: nothing ever published ``kind="log"``, so the view showed the
+        interface's own start-up messages and then sat there, looking frozen while the
+        daemon worked perfectly.
+        """
+        self.bus.publish("log", level=level, message=message)
 
     # ---- discovery -------------------------------------------------------------------
 
@@ -379,6 +442,26 @@ class Runner:
                 except Exception as exc:  # noqa: BLE001 - a bad edit must not kill the daemon
                     log.error(f"runner: reloading the store failed: {exc!r}")
 
+    # ---- the owning process ----------------------------------------------------------
+
+    async def _owner_watch_loop(self) -> None:
+        """Stop when the process that started us goes away.
+
+        Through the ordinary stop path rather than by exiting: that is what removes the
+        resolution rules and flushes the cache, so closing the application really does put
+        the machine back as it was -- including when the window crashes rather than
+        quitting politely, which is the case a "quit" menu item cannot cover.
+        """
+        while not self._stop.is_set():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), OWNER_POLL_SECONDS)
+            if self._stop.is_set():
+                return
+            if not netstate.pid_alive(self.owner_pid):
+                log.write(f"runner: owner {self.owner_pid} is gone; shutting down")
+                self.request_stop()
+                return
+
     # ---- stop ----------------------------------------------------------------------
 
     def request_stop(self) -> None:
@@ -389,6 +472,8 @@ class Runner:
         tasks = [loop.create_task(self._heartbeat()), loop.create_task(self._store_watch_loop())]
         if self.settings.traefik_enabled:
             tasks.append(loop.create_task(self._traefik_loop()))
+        if self.owner_pid:
+            tasks.append(loop.create_task(self._owner_watch_loop()))
         if self.settings.docker_enabled:
             tasks.append(loop.create_task(self._docker_loop()))
         try:
@@ -403,6 +488,8 @@ class Runner:
             await asyncio.sleep(HEARTBEAT_SECONDS)
 
     async def stop(self) -> None:
+        log.remove_sink(self._publish_log)
+
         if self.api is not None:
             await self.api.stop()
             self.api = None

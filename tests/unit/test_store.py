@@ -196,3 +196,64 @@ def test_one_source_does_not_touch_another(store):
     store.reconcile("docker", [])
 
     assert [d.name for d in store.load().domains] == ["etm39.ru"]
+
+
+# ---- writing only when something changed --------------------------------------------
+
+
+def test_a_pass_that_changes_nothing_does_not_write(tmp_path):
+    """Every write rotates a backup, and the Traefik poll runs every ten seconds.
+
+    Writing unconditionally burned all ten backup slots in under two minutes, so the one
+    thing they exist for -- undoing a bad reconciliation over a hundred domains -- was gone
+    before anyone could reach for it. It also woke the store watcher on every poll.
+    """
+    from core.model import SOURCE_TRAEFIK, Domain
+
+    store = DomainStore(tmp_path / "domains.json")
+    discovered = [Domain(name="etm39.ru", source=SOURCE_TRAEFIK, owner="host:etm39.ru")]
+
+    store.reconcile(SOURCE_TRAEFIK, discovered)
+    stamp = store.path.stat().st_mtime_ns
+    backups = len(list(tmp_path.glob("*.bak")))
+
+    for _ in range(5):
+        outcome = store.reconcile(
+            SOURCE_TRAEFIK,
+            [Domain(name="etm39.ru", source=SOURCE_TRAEFIK, owner="host:etm39.ru")],
+        )
+        assert not outcome.changed
+
+    assert store.path.stat().st_mtime_ns == stamp, "the file was rewritten by an idle pass"
+    assert len(list(tmp_path.glob("*.bak"))) == backups, "an idle pass burned a backup slot"
+
+
+def test_a_pass_that_does_change_something_still_writes(tmp_path):
+    from core.model import SOURCE_TRAEFIK, Domain
+
+    store = DomainStore(tmp_path / "domains.json")
+    store.reconcile(
+        SOURCE_TRAEFIK, [Domain(name="a.test", source=SOURCE_TRAEFIK, owner="host:a.test")]
+    )
+    before = len(list(tmp_path.glob("*.bak")))
+
+    outcome = store.reconcile(
+        SOURCE_TRAEFIK,
+        [
+            Domain(name="a.test", source=SOURCE_TRAEFIK, owner="host:a.test"),
+            Domain(name="b.test", source=SOURCE_TRAEFIK, owner="host:b.test"),
+        ],
+    )
+    assert outcome.changed
+    assert len(list(tmp_path.glob("*.bak"))) == before + 1
+    assert sorted(d.name for d in store.load().domains) == ["a.test", "b.test"]
+
+
+def test_an_ordinary_edit_still_writes(tmp_path):
+    store = DomainStore(tmp_path / "domains.json")
+    created = store.add(Domain(name="shop.test"))
+    stamp = store.path.stat().st_mtime_ns
+
+    store.toggle(created.id, enabled=False)
+    assert store.path.stat().st_mtime_ns != stamp
+    assert store.load().domains[0].enabled is False

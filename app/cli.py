@@ -40,6 +40,9 @@ def _build_parser():
     parser.add_argument("--version", action="store_true", help=t("cli.help_version"))
     parser.add_argument("--lang", metavar="CODE", default="", help=t("cli.help_lang"))
     parser.add_argument("--quiet", action="store_true", help=t("cli.help_quiet"))
+    parser.add_argument(
+        "--owner-pid", metavar="PID", type=int, default=0, help=t("cli.help_owner_pid")
+    )
 
     roles = parser.add_mutually_exclusive_group()
     roles.add_argument("--gui", action="store_true", help=t("cli.help_gui"))
@@ -115,7 +118,7 @@ def dispatch(argv: list[str]) -> int:
         return _repair(quiet=args.quiet)
 
     if role is Role.DAEMON_FOREGROUND:
-        return _daemon_foreground()
+        return _daemon_foreground(owner_pid=args.owner_pid)
 
     if role is Role.SERVICE:
         return _service()
@@ -139,6 +142,7 @@ def _service() -> int:
     starts the process, so this is the ordinary daemon path.
     """
     if sys.platform != "win32":
+        # No owner pid here, deliberately: a service must outlive every window.
         return _daemon_foreground()
 
     try:
@@ -214,7 +218,7 @@ def _repair(*, quiet: bool = False) -> int:
     return repair(quiet=quiet)
 
 
-def _daemon_foreground() -> int:
+def _daemon_foreground(owner_pid: int = 0) -> int:
     """Run the resolver in this process until interrupted.
 
     Imported here rather than at module scope so that ``--version`` and ``--status`` do not
@@ -224,7 +228,7 @@ def _daemon_foreground() -> int:
 
     from daemon.runner import Runner, run_forever
 
-    runner = Runner()
+    runner = Runner(owner_pid=owner_pid)
     try:
         return asyncio.run(run_forever(runner))
     except KeyboardInterrupt:

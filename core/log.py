@@ -10,12 +10,28 @@ from __future__ import annotations
 import contextlib
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from core.paths import log_file
 
 MAX_BYTES = 1 << 20
 KEEP = 3
+
+#: Called with (level, message) for every line, in addition to the file. The daemon
+#: attaches one so the window's log view has something to show; without it that view could
+#: only ever display the interface's own start-up messages and then sit there looking
+#: frozen, which is exactly how it looked.
+_sinks: list[Callable[[str, str], None]] = []
+
+
+def add_sink(sink: Callable[[str, str], None]) -> None:
+    _sinks.append(sink)
+
+
+def remove_sink(sink: Callable[[str, str], None]) -> None:
+    with contextlib.suppress(ValueError):
+        _sinks.remove(sink)
 
 
 def _rotate(path: Path) -> None:
@@ -42,6 +58,12 @@ def write(message: str, *, level: str = "info") -> None:
             handle.write(f"{stamp} [{os.getpid()}] {level:<5} {message}\n")
     except OSError:
         pass
+
+    # After the file, and each sink guarded separately: a subscriber that throws must not
+    # cost the line on disk, and must not stop the next subscriber from seeing it.
+    for sink in tuple(_sinks):
+        with contextlib.suppress(Exception):
+            sink(level, message)
 
 
 def warn(message: str) -> None:
