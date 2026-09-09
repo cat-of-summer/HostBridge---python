@@ -69,6 +69,9 @@ class Runner:
         self.traefik_ok = True
         """Starts optimistic so the first failure is what gets logged, not the first poll."""
 
+        self.docker_ok = True
+        """The same, for the engine: a machine without Docker logs one line, not one a poll."""
+
         self.control_enabled = control_enabled
         self.api = None
         self.bus = Bus()
@@ -206,6 +209,24 @@ class Runner:
         netstate.write(state)
         self.apply_policy(zone, state)
 
+    # ---- discovery -------------------------------------------------------------------
+
+    def _announce(self, source: str, outcome) -> None:
+        """Tell the subscribers a sync pass changed something.
+
+        Without this an import is invisible to an open window until the user does something
+        that happens to refresh it -- the very case Docker makes common, because a
+        ``compose up`` rewrites the list while nobody is touching the keyboard.
+        """
+        self.bus.publish(
+            "domains",
+            action="sync",
+            source=source,
+            added=list(outcome.added),
+            updated=list(outcome.updated),
+            removed=list(outcome.removed),
+        )
+
     # ---- Traefik ---------------------------------------------------------------------
 
     async def poll_traefik(self) -> bool:
@@ -239,6 +260,7 @@ class Runner:
             f"traefik: +{len(outcome.added)} ~{len(outcome.updated)} -{len(outcome.removed)}"
         )
         self.reload()
+        self._announce("traefik", outcome)
         return True
 
     async def _traefik_loop(self) -> None:
@@ -250,6 +272,78 @@ class Runner:
                 log.error(f"traefik: poll failed: {exc!r}")
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), interval)
+
+    # ---- Docker ----------------------------------------------------------------------
+
+    async def poll_docker(self) -> bool:
+        """One scan of the running containers. Returns whether the store changed.
+
+        Same rule as Traefik: an unreachable engine is not an empty engine, so a failure
+        leaves the records exactly as they are rather than deleting them all.
+        """
+        from core.model import SOURCE_DOCKER
+        from discover.dockerhttp import DockerUnavailable, containers
+        from discover.labels import containers_to_domains
+
+        try:
+            listing = await containers(host=self.settings.docker_host)
+        except DockerUnavailable as exc:
+            if self.docker_ok:
+                log.warn(f"docker: {exc}")
+            self.docker_ok = False
+            return False
+
+        if not self.docker_ok:
+            log.write("docker: reachable again")
+        self.docker_ok = True
+
+        result = containers_to_domains(listing)
+        if result.skipped_invalid:
+            log.warn(f"docker: skipped unusable names {result.skipped_invalid}")
+
+        outcome = self.store.reconcile(SOURCE_DOCKER, result.domains)
+        if not outcome.changed:
+            return False
+
+        log.write(
+            f"docker: +{len(outcome.added)} ~{len(outcome.updated)} -{len(outcome.removed)}"
+        )
+        self.reload()
+        self._announce("docker", outcome)
+        return True
+
+    async def _docker_loop(self) -> None:
+        """Scan, then follow the event stream, reconnecting for as long as we are running.
+
+        A full scan runs on **every** reconnection and not only at the start. The ``since``
+        window can still miss events across an engine restart, and a domain list that has
+        silently drifted is worse than one redundant listing.
+        """
+        from discover.dockerhttp import BACKOFF_SECONDS, DockerUnavailable, events
+
+        attempt = 0
+        while not self._stop.is_set():
+            try:
+                await self.poll_docker()
+                if not self.docker_ok:
+                    raise DockerUnavailable("not reachable")
+
+                attempt = 0
+                async for _event in events(self._stop, host=self.settings.docker_host):
+                    if self._stop.is_set():
+                        return
+                    await self.poll_docker()
+            except DockerUnavailable:
+                pass
+            except Exception as exc:  # noqa: BLE001 - a poll must never kill the daemon
+                log.error(f"docker: {exc!r}")
+
+            if self._stop.is_set():
+                return
+            delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)]
+            attempt += 1
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), delay)
 
     # ---- watching the store ----------------------------------------------------------
 
@@ -295,6 +389,8 @@ class Runner:
         tasks = [loop.create_task(self._heartbeat()), loop.create_task(self._store_watch_loop())]
         if self.settings.traefik_enabled:
             tasks.append(loop.create_task(self._traefik_loop()))
+        if self.settings.docker_enabled:
+            tasks.append(loop.create_task(self._docker_loop()))
         try:
             await self._stop.wait()
         finally:

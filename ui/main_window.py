@@ -1,9 +1,9 @@
 """The window: a tab bar, a status line, and a banner when the resolver is not running.
 
-The placeholder tabs are deliberate. Docker and Settings arrive in later milestones, but the
-tab indices are saved in the user's config, and a tab appearing later would silently shift
-whatever they had selected. Showing them now, disabled and labelled with the milestone they
-belong to, costs a label and avoids that.
+The placeholder tab is deliberate. Settings arrives in a later milestone, but the tab indices
+are saved in the user's config, and a tab appearing later would silently shift whatever they
+had selected. Showing it now, disabled and labelled with the milestone it belongs to, costs a
+label and avoids that.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from client.api import Bridge, BridgeError
 from core.version import __version__
 from ui.bridge import BridgeWorker
+from ui.docker_tab import DockerTab
 from ui.domains_tab import DomainsTab
 from ui.i18n import t
 from ui.tray import Tray
@@ -72,6 +73,10 @@ class MainWindow(QMainWindow):
         self.domains_tab = DomainsTab(bridge)
         self.domains_tab.changed.connect(self.refresh_status)
 
+        self.docker_tab = DockerTab(bridge)
+        self.docker_tab.changed.connect(self.domains_tab.refresh)
+        self.docker_tab.changed.connect(self.refresh_status)
+
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(LOG_LINES)
@@ -79,12 +84,14 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self.domains_tab, t("gui.tab_domains"))
         self.tabs.addTab(self.log_view, t("gui.tab_log"))
-        self.tabs.addTab(_placeholder(t("gui.tab_pending", milestone="M6")), t("gui.tab_docker"))
+        self.tabs.addTab(self.docker_tab, t("gui.tab_docker"))
         self.tabs.addTab(
             _placeholder(t("gui.tab_pending", milestone="M9")), t("gui.tab_settings")
         )
-        self.tabs.setTabEnabled(2, False)
         self.tabs.setTabEnabled(3, False)
+        # Listing containers costs a round trip to the engine, so it happens when the tab is
+        # first looked at rather than on every window open.
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -111,6 +118,12 @@ class MainWindow(QMainWindow):
         self.domains_tab.refresh()
         self.refresh_status()
 
+    # ---- tabs ---------------------------------------------------------------------
+
+    def _on_tab_changed(self, index: int) -> None:
+        if self.tabs.widget(index) is self.docker_tab:
+            self.docker_tab.refresh()
+
     # ---- events from the daemon ---------------------------------------------------
 
     def _on_event(self, payload: dict) -> None:
@@ -133,7 +146,10 @@ class MainWindow(QMainWindow):
         if self.worker.bridge is not None:
             self.bridge = self.worker.bridge
             self.domains_tab.bridge = self.worker.bridge
+            self.docker_tab.bridge = self.worker.bridge
         self.domains_tab.refresh()
+        if self.tabs.currentWidget() is self.docker_tab:
+            self.docker_tab.refresh()
         self.refresh_status()
 
     # ---- status -------------------------------------------------------------------
@@ -190,6 +206,7 @@ class MainWindow(QMainWindow):
         if bridge.online:
             self.bridge = bridge
             self.domains_tab.bridge = bridge
+            self.docker_tab.bridge = bridge
             self._finish_start_attempt()
             self.domains_tab.refresh()
             self.refresh_status()

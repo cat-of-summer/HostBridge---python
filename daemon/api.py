@@ -261,6 +261,13 @@ class ControlApi:
             changed = await self.runner.poll_traefik()
             return Response(200, {"changed": changed, "reachable": self.runner.traefik_ok})
 
+        if path == "/v1/docker/refresh" and method == "POST":
+            changed = await self.runner.poll_docker()
+            return Response(200, {"changed": changed, "reachable": self.runner.docker_ok})
+
+        if path == "/v1/docker/containers" and method == "GET":
+            return Response(200, await self._containers_payload())
+
         if path == "/v1/reapply" and method == "POST":
             self.runner.reload()
             return Response(200, self._status_payload())
@@ -276,6 +283,39 @@ class ControlApi:
             "domains": [domain.to_dict() for domain in snapshot.domains],
         }
 
+    async def _containers_payload(self) -> dict[str, Any]:
+        """What the Docker tab draws.
+
+        Every running container is listed, not only the labelled ones: the tab's purpose is
+        partly to show the user which containers *could* be given a domain, and a list that
+        silently omits them cannot do that.
+        """
+        from discover import labels as labelmod
+        from discover.dockerhttp import DockerUnavailable, containers
+
+        try:
+            listing = await containers(host=self.runner.settings.docker_host)
+        except DockerUnavailable as exc:
+            return {"reachable": False, "error": str(exc), "containers": []}
+
+        rows = []
+        for container in listing:
+            found = labelmod.labels_of(container)
+            names = labelmod.wanted_names(found)
+            rows.append(
+                {
+                    "id": str(container.get("Id", ""))[:12],
+                    "name": labelmod.container_name(container),
+                    "image": str(container.get("Image", "")),
+                    "state": str(container.get("State", "")),
+                    "status": str(container.get("Status", "")),
+                    "names": names,
+                    "address": labelmod.address_of(found) if names else "",
+                }
+            )
+        rows.sort(key=lambda row: row["name"])
+        return {"reachable": True, "error": "", "containers": rows}
+
     def _status_payload(self) -> dict[str, Any]:
         status = collect_status(self.runner.store)
         resolver = self.runner.resolver
@@ -288,6 +328,7 @@ class ControlApi:
             "claimed": list(self.runner.applied.namespaces),
             "policy_error": self.runner.policy_error,
             "traefik_ok": self.runner.traefik_ok,
+            "docker_ok": self.runner.docker_ok,
             "domains_total": status.total,
             "domains_enabled": status.enabled,
             "queries": getattr(resolver, "queries", 0),

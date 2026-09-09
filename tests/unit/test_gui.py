@@ -237,3 +237,94 @@ def test_the_dialog_returns_normalised_values(dialog_factory):
     dialog.name_edit.setText("  SHOP.TEST.  ")
     dialog.address_edit.setText("10.0.0.5")
     assert dialog.result_values() == {"name": "shop.test", "address": "10.0.0.5", "note": ""}
+
+
+# ---- the container table ------------------------------------------------------------
+
+
+def _containers():
+    return [
+        {
+            "id": "aaa",
+            "name": "shop",
+            "image": "nginx",
+            "state": "running",
+            "status": "Up 3 minutes",
+            "names": ["shop.test", "www.shop.test"],
+            "address": "127.0.0.1",
+        },
+        {
+            "id": "bbb",
+            "name": "idle",
+            "image": "redis",
+            "state": "running",
+            "status": "Up 1 hour",
+            "names": [],
+            "address": "",
+        },
+    ]
+
+
+def test_the_container_model_reports_its_shape(qt_app):
+    from ui.containers_model import ContainerTableModel
+
+    model = ContainerTableModel(_containers())
+    assert model.rowCount() == 2
+    assert model.columnCount() == 4
+
+
+def test_the_declared_hostnames_are_shown_joined(qt_app):
+    from ui.containers_model import COLUMN_DOMAINS, COLUMN_NAME, ContainerTableModel
+
+    model = ContainerTableModel(_containers())
+    assert model.data(model.index(0, COLUMN_NAME), Qt.DisplayRole) == "shop"
+    assert (
+        model.data(model.index(0, COLUMN_DOMAINS), Qt.DisplayRole) == "shop.test, www.shop.test"
+    )
+    assert model.data(model.index(1, COLUMN_DOMAINS), Qt.DisplayRole) == ""
+
+
+def test_an_unlabelled_container_is_listed_but_dimmed(qt_app):
+    """Part of the tab's job is showing what *could* be given a domain, so it is not hidden."""
+    from ui.containers_model import COLUMN_NAME, UNLABELLED_COLOUR, ContainerTableModel
+
+    model = ContainerTableModel(_containers())
+    assert model.data(model.index(1, COLUMN_NAME), Qt.ForegroundRole) == UNLABELLED_COLOUR
+    assert model.data(model.index(0, COLUMN_NAME), Qt.ForegroundRole) is None
+
+
+def test_the_container_model_is_read_only(qt_app):
+    """Discovered domains are owned by the sync pass; editing one here would be undone."""
+    from ui.containers_model import COLUMN_DOMAINS, ContainerTableModel
+
+    model = ContainerTableModel(_containers())
+    flags = model.flags(model.index(0, COLUMN_DOMAINS))
+    assert not flags & Qt.ItemIsEditable
+    assert not flags & Qt.ItemIsUserCheckable
+
+
+def test_the_same_containers_do_not_reset_the_container_model(qt_app):
+    """A compose up fires an event per container; a reset each time would drop the selection."""
+    from ui.containers_model import ContainerTableModel
+
+    model = ContainerTableModel(_containers())
+    resets = []
+    model.modelReset.connect(lambda: resets.append(1))
+
+    changed = _containers()
+    changed[0]["state"] = "exited"
+    model.replace(changed)
+    assert resets == []
+    assert model.rows()[0]["state"] == "exited"
+
+    model.replace(_containers()[:1])
+    assert resets == [1]
+
+
+def test_names_at_answers_for_a_row_that_is_not_there(qt_app):
+    from ui.containers_model import ContainerTableModel
+
+    model = ContainerTableModel(_containers())
+    assert model.names_at(-1) == []
+    assert model.names_at(9) == []
+    assert model.names_at(0) == ["shop.test", "www.shop.test"]

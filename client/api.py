@@ -315,6 +315,18 @@ class Bridge:
     def refresh_traefik(self) -> dict[str, Any]:
         return self._backend.call("POST", "/v1/traefik/refresh", {})
 
+    def refresh_docker(self) -> dict[str, Any]:
+        return self._backend.call("POST", "/v1/docker/refresh", {})
+
+    def containers(self) -> dict[str, Any]:
+        """The running containers as the daemon sees them.
+
+        Asked of the daemon rather than of Docker directly: the GUI runs as the user, and on
+        Windows the engine's named pipe is routinely readable only by the ``docker-users``
+        group. The daemon is elevated and already connected.
+        """
+        return self._backend.call("GET", "/v1/docker/containers")
+
     def reapply(self) -> dict[str, Any]:
         return self._backend.call("POST", "/v1/reapply", {})
 

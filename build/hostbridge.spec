@@ -96,7 +96,16 @@ def discover_modules():
     return sorted(set(found))
 
 
+#: Modules that cannot even be imported on the wrong platform, so they must not be offered
+#: to PyInstaller there. Everything else guards at run time and imports fine everywhere;
+#: this one pulls pywin32 in at module scope because the SCM handshake needs it before any
+#: of our own code runs.
+WINDOWS_ONLY = ("daemon.winservice",)
+
 HIDDEN = discover_modules()
+if not sys.platform.startswith("win"):
+    HIDDEN = [name for name in HIDDEN if name not in WINDOWS_ONLY]
+
 HIDDEN += ["dnslib", "dnslib.dns", "dnslib.server"]
 if sys.platform.startswith("win"):
     # The SCM handshake. Without a dispatcher the service fails with error 1053.

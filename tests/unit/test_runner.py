@@ -369,3 +369,141 @@ def test_an_unchanged_poll_does_not_rewrite_anything(settings, store, monkeypatc
 
     assert _run(runner.poll_traefik()) is True
     assert _run(runner.poll_traefik()) is False
+
+
+# ---- Docker import -----------------------------------------------------------------
+
+
+def _container(name: str, host: str):
+    return {
+        "Id": f"{name}0123456789ab",
+        "Names": [f"/{name}"],
+        "Image": "nginx",
+        "State": "running",
+        "Labels": {"hostbridge.enable": "true", "hostbridge.domain": host},
+    }
+
+
+def test_an_unreachable_docker_never_empties_the_store(settings, store, monkeypatch):
+    """The same property proven for Traefik, and for the same reason.
+
+    Docker Desktop restarting is ordinary. If a failed listing were read as "no containers",
+    every discovered domain would disappear until the engine came back.
+    """
+    from core.model import SOURCE_DOCKER, Domain
+    from discover import dockerhttp
+
+    store.reconcile(
+        SOURCE_DOCKER, [Domain(name="shop.test", source=SOURCE_DOCKER, owner="host:shop.test")]
+    )
+    before = [d.name for d in store.load().domains]
+
+    async def _explode(*_args, **_kwargs):
+        raise dockerhttp.DockerUnavailable("the engine is not running")
+
+    monkeypatch.setattr(dockerhttp, "containers", _explode)
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+
+    assert _run(runner.poll_docker()) is False
+    assert [d.name for d in store.load().domains] == before
+    assert runner.docker_ok is False
+
+
+def test_a_successful_scan_imports_labelled_containers(settings, store, monkeypatch):
+    from discover import dockerhttp
+
+    async def _ok(*_args, **_kwargs):
+        return [_container("shop", "shop.test"), _container("api", "api.shop.test")]
+
+    monkeypatch.setattr(dockerhttp, "containers", _ok)
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+
+    assert _run(runner.poll_docker()) is True
+    assert sorted(d.name for d in store.load().domains) == [
+        "*.dobroedelo.ru",
+        "api.shop.test",
+        "shop.test",
+    ]
+
+
+def test_an_unchanged_scan_does_not_rewrite_anything(settings, store, monkeypatch):
+    """The event stream fires a scan per container during a compose up; an idle one is free."""
+    from discover import dockerhttp
+
+    async def _ok(*_args, **_kwargs):
+        return [_container("shop", "shop.test")]
+
+    monkeypatch.setattr(dockerhttp, "containers", _ok)
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+
+    assert _run(runner.poll_docker()) is True
+    assert _run(runner.poll_docker()) is False
+
+
+def test_a_stopped_container_takes_its_domain_with_it(settings, store, monkeypatch):
+    from discover import dockerhttp
+
+    listing = [_container("shop", "shop.test"), _container("api", "api.shop.test")]
+
+    async def _ok(*_args, **_kwargs):
+        return listing
+
+    monkeypatch.setattr(dockerhttp, "containers", _ok)
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+    assert _run(runner.poll_docker()) is True
+
+    listing.pop()
+    assert _run(runner.poll_docker()) is True
+    assert "api.shop.test" not in [d.name for d in store.load().domains]
+
+
+def test_docker_does_not_touch_what_traefik_owns(settings, store, monkeypatch):
+    """The anti-clobber rule, across two live sources rather than one.
+
+    Both importers run in the same daemon against the same file, and each pass must confine
+    itself to records carrying its own source.
+    """
+    from core.model import SOURCE_TRAEFIK, Domain
+    from discover import dockerhttp
+
+    store.reconcile(
+        SOURCE_TRAEFIK, [Domain(name="etm39.ru", source=SOURCE_TRAEFIK, owner="host:etm39.ru")]
+    )
+
+    async def _ok(*_args, **_kwargs):
+        return [_container("shop", "shop.test")]
+
+    monkeypatch.setattr(dockerhttp, "containers", _ok)
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+    _run(runner.poll_docker())
+
+    kept = next(d for d in store.load().domains if d.name == "etm39.ru")
+    assert kept.source == SOURCE_TRAEFIK
+
+
+def test_the_docker_loop_is_only_started_when_it_is_wanted(settings, store, monkeypatch):
+    """A machine that has switched Docker off should not open a connection per backoff."""
+    from discover import dockerhttp
+
+    calls = []
+
+    async def _count(*_args, **_kwargs):
+        calls.append(1)
+        raise dockerhttp.DockerUnavailable("no")
+
+    monkeypatch.setattr(dockerhttp, "containers", _count)
+    settings.docker_enabled = False
+    settings.traefik_enabled = False
+
+    async def scenario():
+        runner = Runner(settings=settings, store=store, policy=RecordingPolicy(),
+                        control_enabled=False)
+        await runner.start()
+        task = asyncio.get_running_loop().create_task(runner.serve_forever())
+        await asyncio.sleep(0.1)
+        runner.request_stop()
+        await task
+        await runner.stop()
+
+    _run(scenario())
+    assert calls == []

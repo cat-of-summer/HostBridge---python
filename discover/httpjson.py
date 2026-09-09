@@ -55,7 +55,7 @@ def parse_url(url: str, default_path: str = "/") -> Target:
     return Target(host=host, port=port, path=path)
 
 
-async def _read_chunked(reader: asyncio.StreamReader, timeout: float) -> bytes:
+async def read_chunked(reader: asyncio.StreamReader, timeout: float) -> bytes:
     """Reassemble a chunked body.
 
     Each chunk is a hex length, optional extensions after a semicolon, CRLF, the bytes, and
@@ -88,11 +88,11 @@ async def _read_chunked(reader: asyncio.StreamReader, timeout: float) -> bytes:
         await asyncio.wait_for(reader.readexactly(2), timeout)  # the chunk's trailing CRLF
 
 
-async def _read_body(
+async def read_body(
     reader: asyncio.StreamReader, headers: dict[str, str], timeout: float
 ) -> bytes:
     if "chunked" in headers.get("transfer-encoding", "").lower():
-        return await _read_chunked(reader, timeout)
+        return await read_chunked(reader, timeout)
 
     length = headers.get("content-length")
     if length is not None and length.isdigit():
@@ -118,39 +118,11 @@ async def get_json(url: str, *, timeout: float = DEFAULT_TIMEOUT) -> Any:
         raise HttpError(f"{target.host}:{target.port}: {exc}") from exc
 
     try:
-        request = (
-            f"GET {target.path} HTTP/1.1\r\n"
-            f"Host: {target.host}:{target.port}\r\n"
-            "Accept: application/json\r\n"
-            "User-Agent: HostBridge\r\n"
-            "Connection: close\r\n"
-            "\r\n"
-        )
-        writer.write(request.encode("ascii"))
+        writer.write(build_request("GET", target.path, f"{target.host}:{target.port}"))
         await writer.drain()
 
-        status_line = await asyncio.wait_for(reader.readline(), timeout)
-        if not status_line:
-            raise HttpError("the connection closed before any response")
-        parts = status_line.decode("latin-1").split()
-        if len(parts) < 2 or not parts[1].isdigit():
-            raise HttpError(f"unreadable status line: {status_line!r}")
-        status = int(parts[1])
-
-        headers: dict[str, str] = {}
-        read = len(status_line)
-        while True:
-            line = await asyncio.wait_for(reader.readline(), timeout)
-            read += len(line)
-            if line in (b"\r\n", b"\n", b""):
-                break
-            if read > MAX_HEADER_BYTES:
-                raise HttpError("response headers are implausibly large")
-            name, separator, value = line.decode("latin-1").partition(":")
-            if separator:
-                headers[name.strip().lower()] = value.strip()
-
-        body = await _read_body(reader, headers, timeout)
+        status, headers = await read_head(reader, timeout)
+        body = await read_body(reader, headers, timeout)
     except (TimeoutError, asyncio.IncompleteReadError) as exc:
         raise HttpError(f"{target.host}:{target.port}: incomplete response ({exc})") from exc
     except OSError as exc:
@@ -167,3 +139,42 @@ async def get_json(url: str, *, timeout: float = DEFAULT_TIMEOUT) -> Any:
         return json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:
         raise HttpError(f"{target.path} did not return JSON: {exc}") from exc
+
+
+async def read_head(
+    reader: asyncio.StreamReader, timeout: float
+) -> tuple[int, dict[str, str]]:
+    """Read a status line and headers. Shared with the Docker client, which speaks the same
+    HTTP over a different transport."""
+    status_line = await asyncio.wait_for(reader.readline(), timeout)
+    if not status_line:
+        raise HttpError("the connection closed before any response")
+    parts = status_line.decode("latin-1").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        raise HttpError(f"unreadable status line: {status_line!r}")
+
+    headers: dict[str, str] = {}
+    read = len(status_line)
+    while True:
+        line = await asyncio.wait_for(reader.readline(), timeout)
+        read += len(line)
+        if line in (b"\r\n", b"\n", b""):
+            break
+        if read > MAX_HEADER_BYTES:
+            raise HttpError("response headers are implausibly large")
+        name, separator, value = line.decode("latin-1").partition(":")
+        if separator:
+            headers[name.strip().lower()] = value.strip()
+
+    return int(parts[1]), headers
+
+
+def build_request(method: str, path: str, host: str) -> bytes:
+    return (
+        f"{method} {path} HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        "Accept: application/json\r\n"
+        "User-Agent: HostBridge\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+    ).encode("ascii")
