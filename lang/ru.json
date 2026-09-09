@@ -14,6 +14,7 @@
   "cli.help_status": "показать, чем занят демон, и выйти",
   "cli.help_install": "установить системную службу (нужны права администратора)",
   "cli.help_uninstall": "удалить системную службу (нужны права администратора)",
+  "cli.help_service_start": "запустить установленную службу и выйти (нужны права администратора)",
   "cli.role_unavailable": "Режим «{role}» в этой сборке ещё недоступен.",
 
   "cli.status_running": "Резолвер: работает (pid {pid})",
@@ -94,7 +95,7 @@
   "gui.dialog_bad_address": "{address} — не IP-адрес.",
   "gui.banner_offline": "Резолвер не запущен, поэтому эти домены пока не резолвятся.",
   "gui.banner_start": "Запустить резолвер",
-  "gui.start_not_available": "Запуск резолвера из окна появится вместе со службой, на этапе M7. Пока запустите из консоли администратора: hostbridge-cli --daemon-foreground",
+  "gui.banner_starting": "Запускается...",
   "gui.status_running": "Слушает {listen} - занято пространств: {claimed} - доменов: {total}",
   "gui.status_stopped": "Резолвер не запущен - доменов: {total}",
 
@@ -103,6 +104,17 @@
   "tray.stopped": "Резолвер не запущен",
   "tray.quit": "Выход",
   "tray.minimised": "HostBridge продолжает работать. Отсюда его можно открыть снова.",
+
+  "bootstrap.started": "Резолвер запускается...",
+  "bootstrap.cancelled": "Отменено: резолвер не запущен.",
+  "bootstrap.failed": "Не удалось запустить резолвер: {error}",
+  "bootstrap.timeout": "Резолвер не ответил вовремя. Смотрите журнал.",
+  "service.installed": "Служба установлена и запущена.",
+  "service.removed": "Служба удалена.",
+  "service.failed": "Диспетчер служб отказал: {error}",
+  "service.needs_elevation": "Нужны права администратора. Запустите из консоли с повышением или нажмите кнопку в окне.",
+  "service.needs_build": "Службу можно зарегистрировать только на собранный бинарник, а не на исходники.",
+  "service.pywin32_missing": "Диспетчер службы недоступен: {error}",
 
   "error.no_user": "Не удалось определить текущую учётную запись.",
   "error.icacls_failed": "Не удалось ужать права на {path}: {error}",

@@ -83,16 +83,20 @@ class TestWindowedBuildHasNoConsole:
         yield
         monkeypatch.setattr(output, "_has_console", None)
 
-    def test_an_unimplemented_role_reports_instead_of_crashing(self):
-        """Uses a role that is still a stub on purpose.
+    def test_a_refusal_reports_instead_of_crashing(self, monkeypatch):
+        """Uses a role that reports and returns, rather than the default one.
 
-        The default role is the GUI now, and dispatching that really would open a window and
-        hand control to Qt -- so this exercises the same reporting path through a role that
-        still returns rather than running.
+        The default role is the GUI now, and dispatching it really would open a window and
+        hand control to Qt, so this exercises the same reporting path through installing the
+        service without rights -- which refuses with a message rather than running.
         """
-        assert dispatch(["--install-service"]) == 4
-        assert self.shown and Role.INSTALL_SERVICE.value in self.shown[0][0]
-        assert self.shown[0][1] is True
+        from system import elevate
+
+        monkeypatch.setattr(elevate, "is_elevated", lambda: False)
+
+        assert dispatch(["--install-service"]) == 5
+        assert self.shown, "the refusal has to reach the user somehow"
+        assert self.shown[0][1] is True, "and as an error"
 
     def test_version_reaches_the_user(self):
         assert dispatch(["--version"]) == 0

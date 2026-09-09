@@ -52,6 +52,7 @@ def _build_parser():
     roles.add_argument("--status", action="store_true", help=t("cli.help_status"))
     roles.add_argument("--install-service", action="store_true", help=t("cli.help_install"))
     roles.add_argument("--uninstall-service", action="store_true", help=t("cli.help_uninstall"))
+    roles.add_argument("--service-start", action="store_true", help=t("cli.help_service_start"))
     return parser
 
 
@@ -66,6 +67,7 @@ def _role_of(args) -> Role:
         ("status", Role.STATUS),
         ("install_service", Role.INSTALL_SERVICE),
         ("uninstall_service", Role.UNINSTALL_SERVICE),
+        ("service_start", Role.SERVICE_START),
     ):
         if getattr(args, flag):
             return role
@@ -115,9 +117,73 @@ def dispatch(argv: list[str]) -> int:
     if role is Role.DAEMON_FOREGROUND:
         return _daemon_foreground()
 
+    if role is Role.SERVICE:
+        return _service()
+
+    if role in (Role.INSTALL_SERVICE, Role.UNINSTALL_SERVICE):
+        return _manage_service(install=role is Role.INSTALL_SERVICE)
+
+    if role is Role.SERVICE_START:
+        return _start_service()
+
     # Roles are wired up milestone by milestone; each arrives with its own module rather
     # than as a branch bolted onto this function.
     return _not_yet(role)
+
+
+def _service() -> int:
+    """Run under the platform's service manager.
+
+    On Windows that means handing the process to the SCM, which has to happen within about
+    thirty seconds of start or the service fails with error 1053. On Linux systemd simply
+    starts the process, so this is the ordinary daemon path.
+    """
+    if sys.platform != "win32":
+        return _daemon_foreground()
+
+    try:
+        from daemon.winservice import run as service_run
+    except ImportError as exc:
+        emit(t("service.pywin32_missing", error=exc), error=True)
+        return 4
+    return service_run()
+
+
+def _start_service() -> int:
+    """Start an already-installed service. The elevated half of the window's button."""
+    from daemon import service
+
+    try:
+        service.start()
+    except service.NotElevated as exc:
+        emit(str(exc), error=True)
+        return 5
+    except Exception as exc:  # noqa: BLE001 - the platform's refusal is what matters
+        emit(t("service.failed", error=exc), error=True)
+        return 5
+    return 0
+
+
+def _manage_service(*, install: bool) -> int:
+    from daemon import service
+
+    try:
+        if install:
+            service.install()
+            emit(t("service.installed"))
+        else:
+            service.uninstall()
+            emit(t("service.removed"))
+    except service.NotElevated as exc:
+        emit(str(exc), error=True)
+        return 5
+    except service.ServiceUnavailable as exc:
+        emit(str(exc), error=True)
+        return 4
+    except Exception as exc:  # noqa: BLE001 - the platform's refusal is what matters
+        emit(t("service.failed", error=exc), error=True)
+        return 5
+    return 0
 
 
 def _gui() -> int:

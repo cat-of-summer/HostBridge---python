@@ -19,6 +19,7 @@ class Role(str, Enum):
     STATUS = "status"
     INSTALL_SERVICE = "install-service"
     UNINSTALL_SERVICE = "uninstall-service"
+    SERVICE_START = "service-start"
     VERSION = "version"
 
 
@@ -32,6 +33,7 @@ ELEVATED_ROLES = frozenset(
         Role.REPAIR,
         Role.INSTALL_SERVICE,
         Role.UNINSTALL_SERVICE,
+        Role.SERVICE_START,
     }
 )
 

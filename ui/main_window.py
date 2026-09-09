@@ -8,7 +8,9 @@ belong to, costs a label and avoids that.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+import time
+
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -31,6 +33,10 @@ from ui.tray import Tray
 
 #: The log tab is a rolling view, not an archive; the file log keeps everything.
 LOG_LINES = 2000
+
+#: How long to wait for a just-started resolver to answer. The first start also captures
+#: the upstream resolvers and registers the namespaces, so it is not instant.
+START_TIMEOUT_SECONDS = 20.0
 
 
 def _placeholder(text: str) -> QWidget:
@@ -90,6 +96,8 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar())
 
         self.allow_quit = False
+        self._start_timer: QTimer | None = None
+        self._start_deadline = 0.0
         self.tray: Tray | None = None
         if Tray.available():
             self.tray = Tray(self)
@@ -151,13 +159,53 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(text)
 
     def _start_resolver(self) -> None:
-        """Placeholder until the elevation flow lands.
+        """Ask for the resolver to be started, then wait for it to answer.
 
-        Written as its own method now so the banner's wiring does not change later: this is
-        where ``system.elevate`` will spawn the daemon.
+        The consent prompt blocks this thread while it is up, which is fine -- it is
+        system-modal anyway, and a window that carried on painting behind it would only look
+        broken. The *waiting* afterwards is on a timer rather than a loop, because that part
+        can take fifteen seconds and freezing there would look like a hang.
         """
-        self.log_view.appendPlainText(t("gui.start_not_available"))
-        self.tabs.setCurrentWidget(self.log_view)
+        from client.bootstrap import start_resolver
+
+        self.banner_button.setEnabled(False)
+        self.banner_button.setText(t("gui.banner_starting"))
+
+        outcome = start_resolver()
+        self.log_view.appendPlainText(outcome.message)
+        if not outcome.started:
+            self._finish_start_attempt()
+            if not outcome.cancelled:
+                self.tabs.setCurrentWidget(self.log_view)
+            return
+
+        self._start_deadline = time.monotonic() + START_TIMEOUT_SECONDS
+        self._start_timer = QTimer(self)
+        self._start_timer.setInterval(500)
+        self._start_timer.timeout.connect(self._poll_for_resolver)
+        self._start_timer.start()
+
+    def _poll_for_resolver(self) -> None:
+        bridge = Bridge.connect()
+        if bridge.online:
+            self.bridge = bridge
+            self.domains_tab.bridge = bridge
+            self._finish_start_attempt()
+            self.domains_tab.refresh()
+            self.refresh_status()
+            return
+
+        if time.monotonic() >= self._start_deadline:
+            self.log_view.appendPlainText(t("bootstrap.timeout"))
+            self.tabs.setCurrentWidget(self.log_view)
+            self._finish_start_attempt()
+
+    def _finish_start_attempt(self) -> None:
+        if self._start_timer is not None:
+            self._start_timer.stop()
+            self._start_timer = None
+        self.banner_button.setEnabled(True)
+        self.banner_button.setText(t("gui.banner_start"))
 
     # ---- lifetime -----------------------------------------------------------------
 

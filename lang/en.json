@@ -14,6 +14,7 @@
   "cli.help_status": "report what the daemon is doing and exit",
   "cli.help_install": "install the system service (requires elevation)",
   "cli.help_uninstall": "remove the system service (requires elevation)",
+  "cli.help_service_start": "start the installed service and exit (requires elevation)",
   "cli.role_unavailable": "'{role}' is not available in this build yet.",
 
   "cli.status_running": "Resolver: running (pid {pid})",
@@ -94,7 +95,7 @@
   "gui.dialog_bad_address": "{address} is not an IP address.",
   "gui.banner_offline": "The resolver is not running, so these domains do not resolve yet.",
   "gui.banner_start": "Start the resolver",
-  "gui.start_not_available": "Starting the resolver from the window arrives with the service, in milestone M7. For now run: hostbridge-cli --daemon-foreground from an elevated console.",
+  "gui.banner_starting": "Starting...",
   "gui.status_running": "Listening on {listen} - {claimed} namespaces claimed - {total} domains",
   "gui.status_stopped": "Resolver not running - {total} domains",
 
@@ -103,6 +104,17 @@
   "tray.stopped": "Resolver not running",
   "tray.quit": "Quit",
   "tray.minimised": "HostBridge is still running. Open it again from here.",
+
+  "bootstrap.started": "The resolver is starting...",
+  "bootstrap.cancelled": "Cancelled: the resolver was not started.",
+  "bootstrap.failed": "Could not start the resolver: {error}",
+  "bootstrap.timeout": "The resolver did not answer in time. See the log.",
+  "service.installed": "The service is installed and started.",
+  "service.removed": "The service has been removed.",
+  "service.failed": "The service manager refused: {error}",
+  "service.needs_elevation": "This needs administrator rights. Run it from an elevated console, or use the button in the window.",
+  "service.needs_build": "A service can only be registered against a built binary, not against a source checkout.",
+  "service.pywin32_missing": "The service dispatcher is unavailable: {error}",
 
   "error.no_user": "Cannot determine the current user account.",
   "error.icacls_failed": "Could not tighten permissions on {path}: {error}",

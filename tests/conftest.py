@@ -104,3 +104,33 @@ def qt_app():
 
     application = QApplication.instance() or QApplication([])
     yield application
+
+
+@pytest.fixture(autouse=True)
+def no_elevate(monkeypatch, request):
+    """Refuse to raise a UAC prompt or spawn a detached process from a test.
+
+    ``system.elevate`` cannot go through ``system.run`` -- ShellExecuteExW is not a
+    subprocess call, and a detached spawn must not be waited for -- so it owns its own two
+    seams and they need their own guard. Without this a unit test could put a real
+    consent dialog in front of whoever is running the suite.
+    """
+    if "allow_elevate" in request.fixturenames:
+        return
+
+    from system import elevate as elevate_module
+
+    def _refuse_shell(verb, file, parameters, show, wait):  # noqa: ARG001
+        raise AssertionError(f"a test tried to elevate: {file} {parameters}")
+
+    def _refuse_spawn(argv):
+        raise AssertionError(f"a test tried to spawn a detached process: {' '.join(argv)}")
+
+    monkeypatch.setattr(elevate_module, "_shell_execute", _refuse_shell)
+    monkeypatch.setattr(elevate_module, "_spawn_detached", _refuse_spawn)
+
+
+@pytest.fixture
+def allow_elevate():
+    """Opt out of :func:`no_elevate`. Pair with the ``admin`` marker."""
+    return True
