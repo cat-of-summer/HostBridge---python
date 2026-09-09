@@ -24,9 +24,18 @@ pytestmark = pytest.mark.network
 
 
 def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+    """A port free for **both** protocols, which is what the resolver needs.
+
+    Probing only UDP is not enough and produced a real flake: the two protocols have
+    separate port spaces, so the kernel would happily hand back a UDP port whose TCP side
+    another still-running test was listening on, and the bind failed there instead.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as datagram:
+        datagram.bind(("127.0.0.1", 0))
+        port = datagram.getsockname()[1]
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as stream:
+            stream.bind(("127.0.0.1", port))
+        return port
 
 
 class RecordingPolicy(Policy):
@@ -72,6 +81,11 @@ def settings() -> DaemonSettings:
         listen_port=_free_port(),
         listen_ipv6=False,
         upstreams=["192.0.2.1"],
+        # Off by default so no test reaches the developer's real Traefik or Docker: a
+        # started daemon would otherwise import whatever that machine happens to be
+        # running into the test store. The tests that want a source switch it on.
+        traefik_enabled=False,
+        docker_enabled=False,
     )
 
 
@@ -394,7 +408,7 @@ def test_an_unreachable_docker_never_empties_the_store(settings, store, monkeypa
     from discover import dockerhttp
 
     store.reconcile(
-        SOURCE_DOCKER, [Domain(name="shop.test", source=SOURCE_DOCKER, owner="host:shop.test")]
+        SOURCE_DOCKER, [Domain(name="web.test", source=SOURCE_DOCKER, owner="host:web.test")]
     )
     before = [d.name for d in store.load().domains]
 
@@ -413,7 +427,7 @@ def test_a_successful_scan_imports_labelled_containers(settings, store, monkeypa
     from discover import dockerhttp
 
     async def _ok(*_args, **_kwargs):
-        return [_container("shop", "shop.test"), _container("api", "api.shop.test")]
+        return [_container("web", "web.test"), _container("api", "api.test")]
 
     monkeypatch.setattr(dockerhttp, "containers", _ok)
     runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
@@ -421,8 +435,9 @@ def test_a_successful_scan_imports_labelled_containers(settings, store, monkeypa
     assert _run(runner.poll_docker()) is True
     assert sorted(d.name for d in store.load().domains) == [
         "*.dobroedelo.ru",
-        "api.shop.test",
+        "api.test",
         "shop.test",
+        "web.test",
     ]
 
 
@@ -431,7 +446,7 @@ def test_an_unchanged_scan_does_not_rewrite_anything(settings, store, monkeypatc
     from discover import dockerhttp
 
     async def _ok(*_args, **_kwargs):
-        return [_container("shop", "shop.test")]
+        return [_container("web", "web.test")]
 
     monkeypatch.setattr(dockerhttp, "containers", _ok)
     runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
@@ -443,7 +458,7 @@ def test_an_unchanged_scan_does_not_rewrite_anything(settings, store, monkeypatc
 def test_a_stopped_container_takes_its_domain_with_it(settings, store, monkeypatch):
     from discover import dockerhttp
 
-    listing = [_container("shop", "shop.test"), _container("api", "api.shop.test")]
+    listing = [_container("web", "web.test"), _container("api", "api.test")]
 
     async def _ok(*_args, **_kwargs):
         return listing
@@ -454,7 +469,7 @@ def test_a_stopped_container_takes_its_domain_with_it(settings, store, monkeypat
 
     listing.pop()
     assert _run(runner.poll_docker()) is True
-    assert "api.shop.test" not in [d.name for d in store.load().domains]
+    assert "api.test" not in [d.name for d in store.load().domains]
 
 
 def test_docker_does_not_touch_what_traefik_owns(settings, store, monkeypatch):
@@ -471,7 +486,7 @@ def test_docker_does_not_touch_what_traefik_owns(settings, store, monkeypatch):
     )
 
     async def _ok(*_args, **_kwargs):
-        return [_container("shop", "shop.test")]
+        return [_container("web", "web.test")]
 
     monkeypatch.setattr(dockerhttp, "containers", _ok)
     runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
@@ -492,12 +507,11 @@ def test_the_docker_loop_is_only_started_when_it_is_wanted(settings, store, monk
         raise dockerhttp.DockerUnavailable("no")
 
     monkeypatch.setattr(dockerhttp, "containers", _count)
-    settings.docker_enabled = False
-    settings.traefik_enabled = False
 
     async def scenario():
-        runner = Runner(settings=settings, store=store, policy=RecordingPolicy(),
-                        control_enabled=False)
+        runner = Runner(
+            settings=settings, store=store, policy=RecordingPolicy(), control_enabled=False
+        )
         await runner.start()
         task = asyncio.get_running_loop().create_task(runner.serve_forever())
         await asyncio.sleep(0.1)

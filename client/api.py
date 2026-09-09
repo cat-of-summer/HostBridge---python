@@ -225,38 +225,76 @@ class HttpBackend:
         A blocking generator rather than a callback: the GUI runs it on a QThread and the
         console on a plain thread, and both end it by setting one event.
 
-        The socket timeout is deliberately short. Setting ``stop`` cannot interrupt a read
-        that is already blocked, so the timeout is what bounds how long the thread takes to
-        notice -- and a thread that has not noticed by the time the window closes is the
-        classic "QThread destroyed while still running" abort on exit. A timeout here is
-        expected and ordinary, not an error: the daemon speaks only when something happens.
+        The response body is read with ``select`` on the bare socket rather than through
+        the file object ``http.client`` wraps around it, and that is not a style choice.
+        A socket file wrapper latches the first timeout permanently: after one expiry every
+        later read raises ``OSError: cannot read from timed out object``, whatever the
+        socket then does. Since this stream is silent by design -- the daemon speaks only
+        when something happens -- the first quiet second killed it, and the live log simply
+        stopped a second after the window opened. ``select`` never touches the socket
+        unless there is something to read, so no timeout is ever raised.
+
+        The poll interval is the upper bound on how long closing the window waits for this
+        thread, and a thread still running at teardown is the classic "QThread destroyed
+        while still running" abort on exit.
         """
-        connection = self._connect(timeout=STREAM_POLL_SECONDS)
+        import select
+        import socket as socketlib
+
         try:
-            connection.request("GET", "/v1/events", headers=self._headers())
-            response = connection.getresponse()
-            if response.status != 200:
-                return
+            sock = socketlib.create_connection(("127.0.0.1", self.info.port), timeout=TIMEOUT)
+        except OSError:
+            return
+
+        try:
+            head = f"GET /v1/events HTTP/1.1\r\nHost: 127.0.0.1:{self.info.port}\r\n"
+            for name, value in self._headers().items():
+                head += f"{name}: {value}\r\n"
+            head += "Accept: text/event-stream\r\nConnection: close\r\n\r\n"
+            sock.sendall(head.encode("latin-1"))
+
+            sock.setblocking(False)
+            buffer = b""
+            headers_done = False
+
             while not stop.is_set():
+                ready, _, _ = select.select([sock], [], [], STREAM_POLL_SECONDS)
+                if not ready:
+                    continue
                 try:
-                    line = response.fp.readline()
-                except TimeoutError:
+                    chunk = sock.recv(65536)
+                except (BlockingIOError, InterruptedError):
                     continue
                 except OSError:
                     return
-                if not line:
+                if not chunk:
                     return
-                text = line.decode("utf-8", "replace").strip()
-                if not text or text.startswith(":"):
-                    continue
-                if text.startswith("data:"):
+                buffer += chunk
+
+                if not headers_done:
+                    separator = buffer.find(b"\r\n\r\n")
+                    if separator < 0:
+                        continue
+                    status = buffer[:separator].split(b"\r\n", 1)[0].split()
+                    if len(status) < 2 or status[1] != b"200":
+                        return
+                    buffer = buffer[separator + 4 :]
+                    headers_done = True
+
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    text = line.decode("utf-8", "replace").strip()
+                    # Blank lines separate events and a leading colon is a keepalive
+                    # comment; both are ordinary traffic, not a fault.
+                    if not text or text.startswith(":") or not text.startswith("data:"):
+                        continue
                     with contextlib.suppress(ValueError):
                         yield json.loads(text[len("data:") :].strip())
         except OSError:
             return
         finally:
-            with contextlib.suppress(Exception):
-                connection.close()
+            with contextlib.suppress(OSError):
+                sock.close()
 
 
 class Bridge:

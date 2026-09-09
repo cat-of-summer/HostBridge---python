@@ -29,9 +29,18 @@ pytestmark = pytest.mark.network
 
 
 def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+    """A port free for **both** protocols, which is what the resolver needs.
+
+    Probing only UDP is not enough and produced a real flake: the two protocols have
+    separate port spaces, so the kernel would happily hand back a UDP port whose TCP side
+    another still-running test was listening on, and the bind failed there instead.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as datagram:
+        datagram.bind(("127.0.0.1", 0))
+        port = datagram.getsockname()[1]
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as stream:
+            stream.bind(("127.0.0.1", port))
+        return port
 
 
 class QuietPolicy(Policy):
@@ -71,6 +80,7 @@ class Harness:
             listen_ipv6=False,
             upstreams=["192.0.2.1"],
             traefik_enabled=False,
+            docker_enabled=False,
         )
         self.runner = Runner(self.settings, self.store, QuietPolicy())
         self.loop = asyncio.new_event_loop()
@@ -382,3 +392,38 @@ def test_a_change_is_announced_on_the_event_stream():
             for event in received
         )
         stop.set()
+
+
+def test_the_event_stream_survives_a_quiet_stretch():
+    """The regression that made the live log stop a second after the window opened.
+
+    The stream is silent by design -- the daemon speaks only when something happens -- and
+    reading it through the file object ``http.client`` wraps around the socket latched the
+    first timeout permanently: every later read raised "cannot read from timed out object".
+    So the change had to arrive within the first poll interval or never. Here it deliberately
+    arrives after several.
+    """
+    from client.api import STREAM_POLL_SECONDS, Bridge
+
+    with Harness() as harness:
+        bridge = Bridge.connect()
+        stop = threading.Event()
+        received: list[dict] = []
+
+        def _listen() -> None:
+            for event in bridge.events(stop):
+                received.append(event)
+                if event.get("name") == "quiet.test":
+                    return
+
+        listener = threading.Thread(target=_listen, daemon=True)
+        listener.start()
+        time.sleep(STREAM_POLL_SECONDS * 3 + 0.5)
+
+        harness.request("POST", "/v1/domains", body={"name": "quiet.test"})
+        listener.join(timeout=5)
+        stop.set()
+
+        assert any(event.get("name") == "quiet.test" for event in received), (
+            "the stream died during the quiet stretch"
+        )

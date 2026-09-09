@@ -28,9 +28,18 @@ TTL = 5
 
 
 def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+    """A port free for **both** protocols, which is what the resolver needs.
+
+    Probing only UDP is not enough and produced a real flake: the two protocols have
+    separate port spaces, so the kernel would happily hand back a UDP port whose TCP side
+    another still-running test was listening on, and the bind failed there instead.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as datagram:
+        datagram.bind(("127.0.0.1", 0))
+        port = datagram.getsockname()[1]
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as stream:
+            stream.bind(("127.0.0.1", port))
+        return port
 
 
 def _zone(*specs) -> Zone:
