@@ -521,3 +521,68 @@ def test_the_docker_loop_is_only_started_when_it_is_wanted(settings, store, monk
 
     _run(scenario())
     assert calls == []
+
+
+# ---- filesystem permissions --------------------------------------------------------
+
+
+def test_the_state_directory_is_hardened_once_and_not_per_write(
+    settings, store, monkeypatch, no_acl
+):
+    """Regression, and one only a Windows runner could see.
+
+    Tightening an ACL is a ``chmod`` on POSIX and an ``icacls`` *process* on Windows, so a
+    daemon that hardened on every store write would spawn one per Docker event. It hardens
+    the directory once at start instead; the store writes that follow must add nothing.
+    """
+    from core.paths import machine_home
+    from system import secure
+
+    monkeypatch.setattr(secure, "IS_WINDOWS", True)
+    # _current_user() reads the environment and raises PermissionWarning when it finds
+    # nothing, which the runner suppresses -- so without this the test would pass on a
+    # container by never reaching the call it is about.
+    monkeypatch.setenv("USERNAME", "dev")
+    monkeypatch.delenv("USERDOMAIN", raising=False)
+    runner = Runner(
+        settings=settings, store=store, policy=RecordingPolicy(), control_enabled=False
+    )
+
+    async def scenario():
+        await runner.start()
+        store.add(Domain(name="written.test"))
+        runner.reload()
+        store.add(Domain(name="written-again.test"))
+        runner.reload()
+        await runner.stop()
+
+    _run(scenario())
+
+    hardened = [call for call in no_acl if call[1] == str(machine_home())]
+    assert len(hardened) == 1, f"the state directory was hardened {len(hardened)} times"
+    assert no_acl == hardened, f"something else was hardened as well: {no_acl}"
+
+
+def test_the_token_file_is_hardened_because_it_is_the_one_real_secret(
+    settings, store, monkeypatch, no_acl
+):
+    """``daemon.json`` carries the control-API bearer token.
+
+    Anything that can read it can add a resolution rule, so this one file is hardened
+    individually despite the cost -- and that must not be lost to an optimisation aimed at
+    the store.
+    """
+    from core.paths import daemon_file
+    from system import secure
+
+    monkeypatch.setattr(secure, "IS_WINDOWS", True)
+    monkeypatch.setenv("USERNAME", "dev")
+    monkeypatch.delenv("USERDOMAIN", raising=False)
+    runner = Runner(settings=settings, store=store, policy=RecordingPolicy())
+
+    async def scenario():
+        await runner.start()
+        await runner.stop()
+
+    _run(scenario())
+    assert any(call[1] == str(daemon_file()) for call in no_acl), no_acl

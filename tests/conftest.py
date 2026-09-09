@@ -56,6 +56,34 @@ def no_subprocess(monkeypatch, request):
     monkeypatch.setattr(run_module, "_spawn", _refuse)
 
 
+@pytest.fixture(autouse=True)
+def no_acl(monkeypatch, request):
+    """Record ``icacls`` invocations instead of running them.
+
+    On POSIX ``harden_dir`` and ``harden_file`` are a ``chmod`` and cost nothing, but on
+    Windows each is an external process -- so the two places that legitimately harden
+    something (the state directory at daemon start, and ``daemon.json`` because it carries
+    the API token) turned every daemon-starting test red on the Windows runner and green on
+    Linux. Suppressing them would hide a real contract, so they are recorded here and a
+    test can request ``no_acl`` to assert what was hardened and how often.
+
+    Tests that drive the subprocess seam themselves are left alone: they are asserting on
+    the command line ``_icacls`` builds, which is exactly what this would hide.
+    """
+    if {"allow_run", "fake_spawn"} & set(request.fixturenames):
+        return []
+
+    from system import secure as secure_module
+
+    calls: list[tuple[str, ...]] = []
+
+    def _record(target, grant) -> None:
+        calls.append(("icacls", str(target), "/inheritance:r", "/grant:r", grant))
+
+    monkeypatch.setattr(secure_module, "_icacls", _record)
+    return calls
+
+
 @pytest.fixture
 def allow_run():
     """Opt out of :func:`no_subprocess`. Pair with a marker such as ``admin``."""
