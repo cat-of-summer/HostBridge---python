@@ -6,6 +6,8 @@
 - [app.py](app.py.md)
 - [bridge.py](bridge.py.md)
 - [console.py](console.py.md)
+- [containers_model.py](containers_model.py.md)
+- [docker_tab.py](docker_tab.py.md)
 - [domain_dialog.py](domain_dialog.py.md)
 - [domains_model.py](domains_model.py.md)
 - [domains_tab.py](domains_tab.py.md)
