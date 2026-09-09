@@ -16,6 +16,13 @@
   "cli.help_install": "установить системную службу (нужны права администратора)",
   "cli.help_uninstall": "удалить системную службу (нужны права администратора)",
   "cli.help_service_start": "запустить установленную службу и выйти (нужны права администратора)",
+  "cli.help_install_desktop": "добавить пункт меню и запуск вместе с сеансом (Linux)",
+  "cli.help_uninstall_desktop": "убрать пункт меню и автозапуск (Linux)",
+  "desktop.installed": "Записано: {path}",
+  "desktop.removed": "Удалено: {path}",
+  "desktop.nothing_to_remove": "Ярлыки не были установлены.",
+  "desktop.failed": "Не удалось изменить ярлыки: {error}",
+  "desktop.windows_unsupported": "Ярлыки .desktop — механизм Linux; в Windows используйте ярлык или службу.",
   "cli.role_unavailable": "Режим «{role}» в этой сборке ещё недоступен.",
 
   "cli.status_running": "Резолвер: работает (pid {pid})",
@@ -139,6 +146,7 @@
   "error.policy_failed": "Имена не зарегистрированы в системном резолвере: {error}",
   "error.dns_filtered": "Что-то на этой машине блокирует порт {port} на {address}, запросы до резолвера не доходят. Обычная причина — VPN с защитой от DNS-утечек.",
   "error.dns_filtered_bypass": "Порт {port} на {address} закрыт пакетным фильтром; слушаем ещё и {bypass} — этот адрес фильтр пропускает.",
+  "error.resolved_stub_unused": "{path} не указывает на systemd-resolved, поэтому обычные программы идут мимо него и эти домены у них не разрешатся. Верните ссылку на /run/systemd/resolve/stub-resolv.conf.",
   "error.repair_failed": "Не удалось снять оставшиеся правила: {error}",
   "error.gui_unavailable": "Не удалось запустить графический интерфейс: {error}"
 }

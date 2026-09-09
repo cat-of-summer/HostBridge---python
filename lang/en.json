@@ -16,6 +16,13 @@
   "cli.help_install": "install the system service (requires elevation)",
   "cli.help_uninstall": "remove the system service (requires elevation)",
   "cli.help_service_start": "start the installed service and exit (requires elevation)",
+  "cli.help_install_desktop": "add the menu entry and start with the session (Linux)",
+  "cli.help_uninstall_desktop": "remove the menu and autostart entries (Linux)",
+  "desktop.installed": "Written: {path}",
+  "desktop.removed": "Removed: {path}",
+  "desktop.nothing_to_remove": "No desktop entries were installed.",
+  "desktop.failed": "The desktop entries could not be changed: {error}",
+  "desktop.windows_unsupported": "Desktop entries are a Linux mechanism; on Windows use a shortcut or the service.",
   "cli.role_unavailable": "'{role}' is not available in this build yet.",
 
   "cli.status_running": "Resolver: running (pid {pid})",
@@ -139,6 +146,7 @@
   "error.policy_failed": "Names were not registered with the system resolver: {error}",
   "error.dns_filtered": "Something on this machine blocks port {port} on {address}, so queries cannot reach the resolver. A VPN with DNS-leak protection is the usual cause.",
   "error.dns_filtered_bypass": "Port {port} on {address} is blocked by a packet filter; also listening on {bypass}, which that filter permits.",
+  "error.resolved_stub_unused": "{path} does not point at systemd-resolved, so ordinary programs bypass it and these domains will not resolve for them. Restore the link to /run/systemd/resolve/stub-resolv.conf.",
   "error.repair_failed": "Could not remove the leftover rules: {error}",
   "error.gui_unavailable": "The desktop interface could not start: {error}"
 }

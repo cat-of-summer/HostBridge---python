@@ -56,6 +56,12 @@ def _build_parser():
     roles.add_argument("--install-service", action="store_true", help=t("cli.help_install"))
     roles.add_argument("--uninstall-service", action="store_true", help=t("cli.help_uninstall"))
     roles.add_argument("--service-start", action="store_true", help=t("cli.help_service_start"))
+    roles.add_argument(
+        "--install-desktop", action="store_true", help=t("cli.help_install_desktop")
+    )
+    roles.add_argument(
+        "--uninstall-desktop", action="store_true", help=t("cli.help_uninstall_desktop")
+    )
     return parser
 
 
@@ -70,6 +76,8 @@ def _role_of(args) -> Role:
         ("status", Role.STATUS),
         ("install_service", Role.INSTALL_SERVICE),
         ("uninstall_service", Role.UNINSTALL_SERVICE),
+        ("install_desktop", Role.INSTALL_DESKTOP),
+        ("uninstall_desktop", Role.UNINSTALL_DESKTOP),
         ("service_start", Role.SERVICE_START),
     ):
         if getattr(args, flag):
@@ -129,9 +137,48 @@ def dispatch(argv: list[str]) -> int:
     if role is Role.SERVICE_START:
         return _start_service()
 
+    if role in (Role.INSTALL_DESKTOP, Role.UNINSTALL_DESKTOP):
+        return _manage_desktop(install=role is Role.INSTALL_DESKTOP)
+
     # Roles are wired up milestone by milestone; each arrives with its own module rather
     # than as a branch bolted onto this function.
     return _not_yet(role)
+
+
+def _manage_desktop(*, install: bool) -> int:
+    """Add or remove the menu entry and the autostart entry.
+
+    Deliberately not elevated: both files live in the user's own home, and asking for a
+    password to add a shortcut would be the wrong trade. It is also why this is refused
+    outright elsewhere rather than emulated -- Windows has its own mechanisms and a
+    half-working imitation would be worse than an honest no.
+    """
+    if sys.platform == "win32":
+        emit(t("desktop.windows_unsupported"), error=True)
+        return 4
+
+    from system import desktop_linux
+    from system.elevate import own_executable
+
+    executable, prefix = own_executable(windowed=True)
+    command = " ".join([executable, *prefix]) if prefix else executable
+
+    try:
+        if install:
+            plan = desktop_linux.plan_install(command)
+            written = desktop_linux.execute(plan)
+            for path in written:
+                emit(t("desktop.installed", path=path))
+        else:
+            removed = desktop_linux.execute(desktop_linux.plan_uninstall())
+            if not removed:
+                emit(t("desktop.nothing_to_remove"))
+            for path in removed:
+                emit(t("desktop.removed", path=path))
+    except OSError as exc:
+        emit(t("desktop.failed", error=exc), error=True)
+        return 5
+    return 0
 
 
 def _service() -> int:

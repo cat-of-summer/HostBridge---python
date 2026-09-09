@@ -1,14 +1,31 @@
 """Linux name-resolution policy through systemd-resolved routing domains.
 
-The Linux counterpart of :mod:`system.nrpt_win`, and it works the same way for the same
-reason: per-link **routing domains** (the ``~`` prefix) send only matching suffixes to our
-resolver and leave everything else on its existing path. The machine's general DNS
-configuration is never replaced, so losing HostBridge costs the user its own domains and
-nothing more.
+The Linux counterpart of :mod:`system.nrpt_win`, and it has to match NRPT's defining
+property: **the machine's own DNS configuration is never replaced.** Losing HostBridge must
+cost the user its own domains and nothing else.
 
-``resolvectl domain`` replaces the whole list for a link in one call, so a change is a
-single command regardless of how many namespaces there are, and ``resolvectl revert`` is a
-clean single undo.
+Getting that right took running it. The obvious shape -- point the real network link at our
+resolver and give it routing domains -- is wrong twice over, and both faults are silent:
+
+* ``resolvectl dns eth0 127.0.0.1`` **replaces** that link's servers. The ones DHCP gave it
+  are gone, so nothing is left to answer anything else.
+* setting only routing domains on a link clears its ``DefaultRoute`` status, so resolved no
+  longer considers it for names outside those domains.
+
+Together they produce ``example.com: No appropriate name servers or networks for name
+found`` -- the machine's general name resolution broken by a tool whose whole promise is
+not to touch it. Measured, not reasoned about: our domains resolved perfectly while the
+internet did not.
+
+So we claim a link of our own instead. A dummy interface carries our resolver and our
+routing domains, real links are never touched, and the result is additive in exactly the way
+NRPT is. Three details are load-bearing:
+
+* the link needs an **address**, or resolved reports ``Current Scopes: none`` and ignores it
+  entirely -- an up-but-addressless dummy is invisible to it;
+* the address is a link-local one on a ``/32``, so it cannot route or collide with anything;
+* ``resolvectl revert`` plus deleting the interface is the whole undo, and deleting the
+  interface alone would be enough.
 
 Written as a planner -- the functions return command lines and do not run them -- so the
 whole thing is compared as text in a golden test, on any platform, with nothing executed.
@@ -28,9 +45,14 @@ IS_LINUX = os.name == "posix"
 
 SYS_CLASS_NET = Path("/sys/class/net")
 
-#: Never a candidate: loopback carries no upstream, and these are virtual bridges whose
-#: resolvers belong to containers rather than to the host.
-SKIP_PREFIXES = ("lo", "docker", "br-", "veth", "virbr", "vmnet", "tun", "tap", "wg")
+#: Our own interface. Named after the application so a puzzled administrator running
+#: ``ip link`` can tell at a glance what put it there.
+LINK_NAME = "hostbridge0"
+
+#: Link-local (RFC 3927) and a single address, so it is unroutable by construction and
+#: cannot clash with any network the machine is actually on. resolved needs *an* address to
+#: give the link a DNS scope; it never needs to be reachable.
+LINK_ADDRESS = "169.254.53.1/32"
 
 TIMEOUT = 20.0
 
@@ -61,38 +83,51 @@ def routing_domain(namespace: str) -> str:
     return "~" + namespace.lstrip(".")
 
 
-def plan_apply(
-    links: Iterable[str], namespaces: Iterable[str], servers: Sequence[str]
-) -> Plan:
-    """Point ``links`` at ``servers`` for ``namespaces`` only."""
-    link_list = list(dict.fromkeys(links))
+def plan_apply(namespaces: Iterable[str], servers: Sequence[str]) -> Plan:
+    """Create our link if needed, and give it our resolver and our namespaces.
+
+    ``ip link add`` is harmless to repeat -- it fails when the interface exists, and the
+    executor tolerates that -- so applying a changed namespace set costs the same commands
+    as the first time.
+    """
     namespace_list = list(dict.fromkeys(namespaces))
+    if not namespace_list:
+        return Plan(links=(), namespaces=(), commands=())
 
-    commands: list[tuple[str, ...]] = []
-    for link in link_list:
-        commands.append(("resolvectl", "dns", link, *servers))
-        commands.append(
-            ("resolvectl", "domain", link, *(routing_domain(ns) for ns in namespace_list))
-        )
-
+    commands: list[tuple[str, ...]] = [
+        ("ip", "link", "add", LINK_NAME, "type", "dummy"),
+        ("ip", "link", "set", LINK_NAME, "up"),
+        ("ip", "addr", "add", LINK_ADDRESS, "dev", LINK_NAME),
+        ("resolvectl", "dns", LINK_NAME, *servers),
+        (
+            "resolvectl",
+            "domain",
+            LINK_NAME,
+            *(routing_domain(ns) for ns in namespace_list),
+        ),
+    ]
     return Plan(
-        links=tuple(link_list),
+        links=(LINK_NAME,),
         namespaces=tuple(namespace_list),
         commands=tuple(commands),
     )
 
 
-def plan_remove(links: Iterable[str]) -> Plan:
-    """Undo everything we set on ``links``.
+def plan_remove(links: Iterable[str] = ()) -> Plan:
+    """Take our link away again.
 
-    ``revert`` restores whatever the link had before, which is exactly right and is why
-    nothing has to be remembered about the previous configuration.
+    ``links`` is accepted and ignored beyond deciding whether there is anything to do: a
+    state file written by an older build names the real interfaces it configured, and the
+    only correct thing to do with those now is leave them alone -- reverting a link we no
+    longer touch would discard settings that are not ours.
     """
-    link_list = list(dict.fromkeys(links))
     return Plan(
-        links=tuple(link_list),
+        links=(LINK_NAME,),
         namespaces=(),
-        commands=tuple(("resolvectl", "revert", link) for link in link_list),
+        commands=(
+            ("resolvectl", "revert", LINK_NAME),
+            ("ip", "link", "del", LINK_NAME),
+        ),
     )
 
 
@@ -109,26 +144,26 @@ def available() -> bool:
         return False
 
 
-def links(excluded: Sequence[str] = ()) -> list[str]:
-    """Candidate links: real interfaces that are up, minus the virtual ones."""
-    if not SYS_CLASS_NET.is_dir():
-        return []
-    found: list[str] = []
-    for entry in sorted(SYS_CLASS_NET.iterdir()):
-        name = entry.name
-        if name in excluded or name.startswith(SKIP_PREFIXES):
-            continue
-        try:
-            state = (entry / "operstate").read_text(encoding="utf-8").strip()
-        except OSError:
-            continue
-        if state == "up":
-            found.append(name)
-    return found
+def link_present() -> bool:
+    return (SYS_CLASS_NET / LINK_NAME).exists()
+
+
+#: Commands whose failure means "already in the state we wanted". ``ip`` has no --idempotent
+#: worth relying on across distributions, so the plan stays declarative and the executor
+#: knows which refusals are not refusals: creating a link that exists, adding an address it
+#: already has, and removing either when they are already gone.
+TOLERATED = ("exists", "cannot find device", "no such device", "not found")
+
+
+def _tolerable(argv: Sequence[str], output: str) -> bool:
+    if argv[0] != "ip":
+        return False
+    lowered = output.lower()
+    return any(phrase in lowered for phrase in TOLERATED)
 
 
 def execute(plan: Plan) -> None:
-    """Run a plan, stopping at the first refusal."""
+    """Run a plan, stopping at the first refusal that actually means something."""
     if plan.empty:
         return
     for argv in plan.commands:
@@ -136,6 +171,40 @@ def execute(plan: Plan) -> None:
             completed = run(argv, timeout=TIMEOUT)
         except CommandError as exc:
             raise ResolvedError(str(exc)) from exc
-        if not completed.ok:
-            raise ResolvedError(completed.output or f"{argv[0]} exited {completed.returncode}")
+        if completed.ok:
+            continue
+        if _tolerable(argv, completed.output):
+            continue
+        raise ResolvedError(completed.output or f"{argv[0]} exited {completed.returncode}")
     log.write(f"resolved: {len(plan.commands)} commands on {', '.join(plan.links)}")
+
+
+#: resolved's own stub listeners. If ``/etc/resolv.conf`` does not name one of these, the C
+#: library never consults resolved at all, and our routing domains -- correctly registered,
+#: visible in ``resolvectl status`` -- are read by nobody.
+STUB_ADDRESSES = ("127.0.0.53", "127.0.0.54")
+
+RESOLV_CONF = Path("/etc/resolv.conf")
+
+
+def stub_in_use() -> bool:
+    """Whether ordinary programs actually resolve through systemd-resolved.
+
+    Worth asking because the failure is invisible from our side: ``resolvectl query`` shows
+    our domains resolving beautifully while ``getent hosts`` -- and therefore curl, and the
+    browser -- returns nothing, because those go through the C library, which reads
+    ``/etc/resolv.conf``. A machine whose ``resolv.conf`` was replaced by something else
+    (a container runtime, a VPN client, a hand edit) has resolved running and unconsulted.
+    """
+    try:
+        text = RESOLV_CONF.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True  # unreadable: assume the ordinary configuration rather than cry wolf
+    servers = [
+        line.split()[1]
+        for line in text.splitlines()
+        if line.strip().startswith("nameserver") and len(line.split()) > 1
+    ]
+    if not servers:
+        return True
+    return any(server in STUB_ADDRESSES for server in servers)

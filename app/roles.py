@@ -20,6 +20,8 @@ class Role(str, Enum):
     INSTALL_SERVICE = "install-service"
     UNINSTALL_SERVICE = "uninstall-service"
     SERVICE_START = "service-start"
+    INSTALL_DESKTOP = "install-desktop"
+    UNINSTALL_DESKTOP = "uninstall-desktop"
     VERSION = "version"
 
 

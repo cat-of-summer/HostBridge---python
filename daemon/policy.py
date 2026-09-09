@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from core import log
 from system import dnsflush
+from ui.i18n import t
 
 
 class PolicyError(Exception):
@@ -91,16 +92,29 @@ class ResolvedPolicy(Policy):
         self._excluded = tuple(excluded)
 
     def apply(self, namespaces: Sequence[str], servers: Sequence[str]) -> PolicyState:
+        """Claim our namespaces on a link of our own.
+
+        No real interface is enumerated or touched any more. Configuring the machine's
+        actual links replaced the servers DHCP gave them and cleared their default-route
+        status, which broke general name resolution outright -- see
+        :mod:`system.resolved_linux`. ``excluded_adapters`` therefore has nothing left to
+        exclude here; it is kept because the setting is still meaningful elsewhere.
+        """
         from system import resolved_linux
 
-        links = resolved_linux.links(self._excluded)
-        if not links:
-            raise PolicyError("no candidate network links were found")
         try:
-            resolved_linux.execute(resolved_linux.plan_apply(links, namespaces, servers))
+            resolved_linux.execute(resolved_linux.plan_apply(namespaces, servers))
         except resolved_linux.ResolvedError as exc:
             raise PolicyError(str(exc)) from exc
-        return PolicyState(namespaces=tuple(namespaces), links=tuple(links))
+
+        if not resolved_linux.stub_in_use():
+            # Not fatal, and not a reason to refuse: resolvectl will answer, so the rules
+            # are real. But the C library will not consult them, so the browser sees
+            # nothing -- and saying so beats letting the user hunt for it.
+            log.warn(t("error.resolved_stub_unused", path=resolved_linux.RESOLV_CONF))
+        return PolicyState(
+            namespaces=tuple(namespaces), links=(resolved_linux.LINK_NAME,)
+        )
 
     def remove(self, state: PolicyState) -> None:
         from system import resolved_linux
@@ -115,9 +129,8 @@ class ResolvedPolicy(Policy):
     def remove_all(self) -> None:
         from system import resolved_linux
 
-        links = resolved_linux.links(self._excluded)
-        if links:
-            self.remove(PolicyState(links=tuple(links)))
+        if resolved_linux.link_present():
+            self.remove(PolicyState(links=(resolved_linux.LINK_NAME,)))
 
 
 def detect(excluded: Sequence[str] = ()) -> Policy:
