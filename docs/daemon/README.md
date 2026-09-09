@@ -9,6 +9,8 @@
 - [policy.py](policy.py.md)
 - [repair.py](repair.py.md)
 - [runner.py](runner.py.md)
+- [service.py](service.py.md)
 - [status.py](status.py.md)
+- [winservice.py](winservice.py.md)
 
 <!-- DOCGEN:END -->
