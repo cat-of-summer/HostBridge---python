@@ -8,6 +8,7 @@
 - [test_config.py](test_config.py.md)
 - [test_console.py](test_console.py.md)
 - [test_dockerhttp.py](test_dockerhttp.py.md)
+- [test_doh.py](test_doh.py.md)
 - [test_elevate.py](test_elevate.py.md)
 - [test_gui.py](test_gui.py.md)
 - [test_i18n.py](test_i18n.py.md)

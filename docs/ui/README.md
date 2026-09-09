@@ -14,6 +14,7 @@
 - [i18n.py](i18n.py.md)
 - [main_window.py](main_window.py.md)
 - [screen.py](screen.py.md)
+- [settings_tab.py](settings_tab.py.md)
 - [tray.py](tray.py.md)
 
 <!-- DOCGEN:END -->
