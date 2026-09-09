@@ -3,6 +3,7 @@
 
 ## Файлы
 
+- [desktop_linux.py](desktop_linux.py.md)
 - [dnsflush.py](dnsflush.py.md)
 - [dnsservers.py](dnsservers.py.md)
 - [elevate.py](elevate.py.md)
