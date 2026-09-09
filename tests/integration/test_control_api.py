@@ -427,3 +427,73 @@ def test_the_event_stream_survives_a_quiet_stretch():
         assert any(event.get("name") == "quiet.test" for event in received), (
             "the stream died during the quiet stretch"
         )
+
+
+# ---- settings ----------------------------------------------------------------------
+
+
+def test_settings_are_readable_and_say_what_needs_a_restart():
+    with Harness() as harness:
+        status, body = harness.request("GET", "/v1/settings")
+        assert status == 200
+        assert body["settings"]["traefik_enabled"] is False
+        assert "upstreams" in body["needs_restart"]
+
+
+def test_a_setting_can_be_changed_and_is_written():
+    """The window cannot write settings.json itself.
+
+    It lives in the machine directory, whose permissions belong to whoever runs the daemon
+    -- SYSTEM, for a service -- so the change has to be made by the process that has them.
+    """
+    from core.config import DaemonSettings
+
+    with Harness() as harness:
+        status, body = harness.request(
+            "PATCH", "/v1/settings", body={"traefik_poll_seconds": 42}
+        )
+        assert status == 200
+        assert body["changed"] == ["traefik_poll_seconds"]
+        assert body["restart_required"] == []
+        assert DaemonSettings.load().traefik_poll_seconds == 42
+
+
+def test_changing_a_binding_says_a_restart_is_needed():
+    with Harness() as harness:
+        _status, body = harness.request(
+            "PATCH", "/v1/settings", body={"upstreams": ["9.9.9.9"]}
+        )
+        assert body["restart_required"] == ["upstreams"]
+
+
+def test_setting_the_same_value_changes_nothing():
+    with Harness() as harness:
+        _status, body = harness.request(
+            "PATCH", "/v1/settings", body={"traefik_enabled": False}
+        )
+        assert body["changed"] == []
+
+
+def test_a_field_outside_the_allow_list_is_refused():
+    """An allow-list means a new field is invisible until someone decides it may be edited."""
+    with Harness() as harness:
+        status, body = harness.request(
+            "PATCH", "/v1/settings", body={"excluded_adapters": ["eth0"]}
+        )
+        assert status == 400
+        assert "not editable" in body["error"]
+
+
+def test_a_wrong_type_is_refused_rather_than_coerced():
+    with Harness() as harness:
+        status, _body = harness.request(
+            "PATCH", "/v1/settings", body={"traefik_poll_seconds": "often"}
+        )
+        assert status == 400
+
+
+def test_a_settings_change_is_announced_on_the_event_stream():
+    with Harness() as harness:
+        harness.request("PATCH", "/v1/settings", body={"local_ttl": 11})
+        kinds = [e.to_dict() for e in harness.runner.bus.history() if e.kind == "settings"]
+        assert kinds and kinds[-1]["changed"] == ["local_ttl"]

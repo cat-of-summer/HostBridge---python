@@ -261,6 +261,13 @@ class ControlApi:
             changed = await self.runner.poll_traefik()
             return Response(200, {"changed": changed, "reachable": self.runner.traefik_ok})
 
+        if path == "/v1/settings":
+            if method == "GET":
+                return Response(200, self._settings_payload())
+            if method == "PATCH":
+                return self._update_settings(request)
+            return Response(405, reason="GET or PATCH")
+
         if path == "/v1/docker/refresh" and method == "POST":
             changed = await self.runner.poll_docker()
             return Response(200, {"changed": changed, "reachable": self.runner.docker_ok})
@@ -282,6 +289,78 @@ class ControlApi:
             "read_only": snapshot.read_only,
             "domains": [domain.to_dict() for domain in snapshot.domains],
         }
+
+    #: Settings the window may change. Everything else in DaemonSettings is either derived
+    #: or dangerous to edit from a form, and an allow-list means a new field is invisible
+    #: until someone decides it should be editable rather than the other way round.
+    EDITABLE = (
+        "listen_address",
+        "listen_port",
+        "upstreams",
+        "local_ttl",
+        "traefik_enabled",
+        "traefik_api",
+        "traefik_poll_seconds",
+        "docker_enabled",
+        "docker_host",
+        "bypass_dns_filter",
+    )
+
+    #: Changing these rebinds sockets or re-captures the upstream list, neither of which can
+    #: be done under a running resolver without a gap. The window says so instead of
+    #: pretending the change took effect.
+    NEEDS_RESTART = ("listen_address", "listen_port", "upstreams")
+
+    def _settings_payload(self) -> dict[str, Any]:
+        settings = self.runner.settings
+        return {
+            "settings": {name: getattr(settings, name) for name in self.EDITABLE},
+            "needs_restart": list(self.NEEDS_RESTART),
+        }
+
+    def _update_settings(self, request: Request) -> Response:
+        """Write the daemon's settings file, because the window cannot.
+
+        ``settings.json`` lives in the machine directory, whose permissions are tightened to
+        whoever runs the daemon -- SYSTEM, when it is a service. The window runs as the user
+        and would simply be refused, so it asks us and we write.
+        """
+        body = request.json()
+        if not isinstance(body, dict):
+            return Response(400, reason="a JSON object was expected")
+
+        settings = self.runner.settings
+        changed: list[str] = []
+        for name, value in body.items():
+            if name not in self.EDITABLE:
+                return Response(400, reason=f"{name} is not editable")
+            current = getattr(settings, name)
+            if not isinstance(value, type(current)) and not (
+                isinstance(current, list) and isinstance(value, list)
+            ):
+                return Response(400, reason=f"{name} has the wrong type")
+            if value != current:
+                setattr(settings, name, value)
+                changed.append(name)
+
+        if not changed:
+            return Response(200, {"changed": [], **self._settings_payload()})
+
+        try:
+            settings.save()
+        except OSError as exc:
+            return Response(500, reason=str(exc))
+
+        log.write(f"api: settings changed: {', '.join(sorted(changed))}")
+        self.bus.publish("settings", changed=sorted(changed))
+        return Response(
+            200,
+            {
+                "changed": sorted(changed),
+                "restart_required": sorted(set(changed) & set(self.NEEDS_RESTART)),
+                **self._settings_payload(),
+            },
+        )
 
     async def _containers_payload(self) -> dict[str, Any]:
         """What the Docker tab draws.

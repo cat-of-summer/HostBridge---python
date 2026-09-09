@@ -365,6 +365,18 @@ class Bridge:
         """
         return self._backend.call("GET", "/v1/docker/containers")
 
+    def settings(self) -> dict[str, Any]:
+        return self._backend.call("GET", "/v1/settings")
+
+    def update_settings(self, **fields: Any) -> dict[str, Any]:
+        """Change the daemon's settings.
+
+        Through the daemon rather than by writing the file: ``settings.json`` lives in the
+        machine directory, whose permissions belong to whoever runs the resolver -- SYSTEM,
+        for a service -- and the window, running as the user, would simply be refused.
+        """
+        return self._backend.call("PATCH", "/v1/settings", fields)
+
     def reapply(self) -> dict[str, Any]:
         return self._backend.call("POST", "/v1/reapply", {})
 
