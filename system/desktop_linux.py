@@ -61,9 +61,15 @@ def _home(variable: str, fallback: str) -> Path:
     A relative value in the variable is ignored rather than resolved against the working
     directory: the spec says so, and a stray entry written into whatever directory the app
     happened to start in would be invisible and never cleaned up.
+
+    "Absolute" is asked of :class:`pathlib.Path` rather than tested as a leading ``/``. On
+    Linux -- the only platform this module runs on -- the two are the same question, but the
+    test suite runs on the Windows runner too, and there a temporary directory is
+    ``C:\\Users\\…``. Spelling the check portably lets that runner exercise the real
+    behaviour instead of silently falling through to the home directory.
     """
     configured = os.environ.get(variable, "").strip()
-    if configured and configured.startswith("/"):
+    if configured and Path(configured).is_absolute():
         return Path(configured)
     return Path.home() / fallback
 

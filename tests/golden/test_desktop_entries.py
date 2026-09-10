@@ -117,3 +117,17 @@ def test_removing_what_is_not_there_is_not_an_error(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     assert desktop_linux.execute(desktop_linux.plan_uninstall()) == []
+
+
+def test_the_absoluteness_check_is_native_to_the_platform(monkeypatch, tmp_path):
+    r"""Regression: the check used to be a leading ``/``, which broke the Windows runner.
+
+    On Linux the two questions are identical, so the fault was invisible there. The Windows
+    runner's temporary directory is ``C:\Users\...``, so the variable was judged relative and
+    ignored, and the test read the runner's real home instead of the one it had just set.
+    """
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    assert desktop_linux.applications_dir().is_relative_to(tmp_path)
+    assert desktop_linux.autostart_dir().is_relative_to(tmp_path)
