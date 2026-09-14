@@ -383,7 +383,7 @@ def test_an_empty_traefik_address_is_how_the_import_is_turned_off(qt_app):
     assert tab.collect()["traefik_api"] == ""
 
 
-def test_an_offline_daemon_disables_the_form_rather_than_lying(qt_app):
+def test_an_offline_daemon_disables_the_form_without_a_word(qt_app):
     from client.api import Bridge, BridgeOffline
     from ui.settings_tab import SettingsTab
 
@@ -402,7 +402,7 @@ def test_an_offline_daemon_disables_the_form_rather_than_lying(qt_app):
     tab = SettingsTab(Bridge(_Offline()))
     tab.refresh()
     assert not tab.save_button.isEnabled()
-    assert "resolver is not running" in tab.message.text()
+    assert tab.message.text() == "", "the notice strip already says so; the form stays quiet"
 
 
 # ---- the notice strip ------------------------------------------------------------------

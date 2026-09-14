@@ -108,7 +108,6 @@
   "settings.save": "Сохранить",
   "settings.saved": "Сохранено.",
   "settings.unchanged": "Ничего не изменилось.",
-  "settings.needs_daemon": "Резолвер не запущен, его настройки не прочитать и не изменить.",
 
   "notice.dismiss": "Скрыть",
   "notice.doh_problem": "Secure DNS включён принудительно: {browsers}. Пока не вернёте «выкл» или «автоматически», эти домены там не откроются.",

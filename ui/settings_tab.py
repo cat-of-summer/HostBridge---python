@@ -142,8 +142,10 @@ class SettingsTab(QWidget):
         try:
             payload = self.bridge.settings()
         except BridgeOffline:
+            # Silently: the notice strip above the tabs already says the resolver is not
+            # running, and a greyed-out form says the rest.
             self._set_enabled(False)
-            self._report(t("settings.needs_daemon"))
+            self._report("")
             return
         except BridgeError as exc:
             self._set_enabled(False)
@@ -170,7 +172,8 @@ class SettingsTab(QWidget):
         try:
             outcome = self.bridge.update_settings(**self.collect())
         except BridgeOffline:
-            self._report(t("settings.needs_daemon"))
+            self._set_enabled(False)
+            self._report("")
             return
         except BridgeError as exc:
             self._report(str(exc), error=True)

@@ -108,7 +108,6 @@
   "settings.save": "Save",
   "settings.saved": "Saved.",
   "settings.unchanged": "Nothing changed.",
-  "settings.needs_daemon": "The resolver is not running, so its settings cannot be read or changed.",
 
   "notice.dismiss": "Dismiss",
   "notice.doh_problem": "Secure DNS is forced in: {browsers}. These domains will not open there until it is set back to off or automatic.",
