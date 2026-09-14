@@ -79,8 +79,7 @@ class Harness:
             listen_port=_free_port(),
             listen_ipv6=False,
             upstreams=["192.0.2.1"],
-            traefik_enabled=False,
-            docker_enabled=False,
+            traefik_api="",
         )
         self.runner = Runner(self.settings, self.store, QuietPolicy())
         self.loop = asyncio.new_event_loop()
@@ -432,12 +431,12 @@ def test_the_event_stream_survives_a_quiet_stretch():
 # ---- settings ----------------------------------------------------------------------
 
 
-def test_settings_are_readable_and_say_what_needs_a_restart():
+def test_settings_are_readable():
     with Harness() as harness:
         status, body = harness.request("GET", "/v1/settings")
         assert status == 200
-        assert body["settings"]["traefik_enabled"] is False
-        assert "upstreams" in body["needs_restart"]
+        assert body["settings"]["traefik_api"] == ""
+        assert body["settings"]["traefik_poll_seconds"] == 10
 
 
 def test_a_setting_can_be_changed_and_is_written():
@@ -454,22 +453,24 @@ def test_a_setting_can_be_changed_and_is_written():
         )
         assert status == 200
         assert body["changed"] == ["traefik_poll_seconds"]
-        assert body["restart_required"] == []
         assert DaemonSettings.load().traefik_poll_seconds == 42
 
 
-def test_changing_a_binding_says_a_restart_is_needed():
+def test_a_binding_is_no_longer_editable_from_the_window():
+    """Nothing left in the allow-list rebinds a socket, which is why there is no longer a
+    "restart required" answer to give. The field survives in settings.json."""
     with Harness() as harness:
-        _status, body = harness.request(
+        status, body = harness.request(
             "PATCH", "/v1/settings", body={"upstreams": ["9.9.9.9"]}
         )
-        assert body["restart_required"] == ["upstreams"]
+        assert status == 400
+        assert "not editable" in body["error"]
 
 
 def test_setting_the_same_value_changes_nothing():
     with Harness() as harness:
         _status, body = harness.request(
-            "PATCH", "/v1/settings", body={"traefik_enabled": False}
+            "PATCH", "/v1/settings", body={"traefik_api": ""}
         )
         assert body["changed"] == []
 

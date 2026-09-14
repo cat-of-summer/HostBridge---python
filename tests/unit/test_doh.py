@@ -154,3 +154,39 @@ def test_nothing_is_ever_written(tmp_path, monkeypatch):
 
     doh.scan()
     assert (root / "Local State").read_bytes() == before
+
+
+# ---- the one line the window actually shows -------------------------------------------
+
+
+def test_nothing_is_said_when_nothing_is_wrong():
+    """Silence is the point: a panel that reported "all four profiles are fine" trained the
+    eye to skip the very place a real warning would appear."""
+    assert doh.warning([]) == ""
+    assert (
+        doh.warning(
+            [
+                doh.Finding(browser="Chrome", profile="", mode="automatic", secure=False),
+                doh.Finding(browser="Edge", profile="", mode="off", secure=False),
+            ]
+        )
+        == ""
+    )
+
+
+def test_only_the_broken_browsers_are_named():
+    text = doh.warning(
+        [
+            doh.Finding(browser="Chrome", profile="", mode="automatic", secure=False),
+            doh.Finding(browser="Firefox", profile="abc.default", mode="3", secure=True),
+        ]
+    )
+    assert "Firefox abc.default (3)" in text
+    assert "Chrome" not in text
+
+
+def test_the_warning_scans_when_it_is_given_nothing(tmp_path, monkeypatch):
+    root = _local_state(tmp_path / "chrome", {"dns_over_https": {"mode": "secure"}})
+    monkeypatch.setattr(doh, "_chromium_roots", lambda: iter([("Chrome", root)]))
+    monkeypatch.setattr(doh, "_firefox_roots", lambda: iter([]))
+    assert "Chrome" in doh.warning()

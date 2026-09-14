@@ -68,3 +68,28 @@ QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #4a8ac9; }
 QLineEdit[invalid="true"] { border-color: #c9564a; }
 
 QStatusBar { background-color: #26282c; }
+
+/* The notice strip. Two severities, both readable against the window without shouting:
+   a warning is something to know, an error is something that stopped working. */
+QFrame[notice="warning"] {
+    background-color: #3a3222;
+    border-bottom: 1px solid #5c4f2e;
+}
+
+QFrame[notice="error"] {
+    background-color: #3a2422;
+    border-bottom: 1px solid #5c3230;
+}
+
+QFrame[notice="warning"] QLabel { color: #e0c48a; }
+QFrame[notice="error"] QLabel { color: #e8a8a0; }
+
+QFrame[notice="warning"] QToolButton,
+QFrame[notice="error"] QToolButton {
+    border: none;
+    padding: 2px 6px;
+    color: #b9bcc2;
+}
+
+QFrame[notice="warning"] QToolButton:hover,
+QFrame[notice="error"] QToolButton:hover { color: #ffffff; }

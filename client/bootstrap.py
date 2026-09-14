@@ -8,8 +8,10 @@ and so the decision of *how* to start it lives in one place:
 2. otherwise run the daemon in the foreground of an elevated process, which is the same
    thing the service would run and needs no installation.
 
-Both paths raise a consent prompt. A dismissed prompt is reported as its own outcome rather
-than as a failure: the user said no, and telling them something broke would be wrong.
+Both paths raise a consent prompt, and the window calls this as soon as it opens, so that
+prompt is the ordinary way a session begins. A dismissed prompt is reported as its own
+outcome rather than as a failure: the user said no, and telling them something broke would
+be wrong -- they get the notice strip with a button and can say yes later.
 """
 
 from __future__ import annotations

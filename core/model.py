@@ -57,8 +57,9 @@ class Domain:
     """Container id or Traefik router name. Empty for a manually created record."""
 
     pinned_fields: list[str] = field(default_factory=list)
-    """Fields the user edited by hand on a discovered record. A sync pass skips these
-    forever after, so retargeting a Traefik-derived domain is not undone on the next poll."""
+    """Fields a user edited by hand on a discovered record, in a store written by an earlier
+    build. A sync pass still skips them, so those edits are not undone; nothing adds to the
+    list any more, because editing a discovered record is now refused outright."""
 
     note: str = ""
     created_at: str = field(default_factory=utc_now)

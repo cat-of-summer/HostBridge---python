@@ -89,8 +89,11 @@ class DaemonSettings:
     fallback_upstreams: list[str] = field(default_factory=lambda: list(DEFAULT_FALLBACK_UPSTREAMS))
     local_ttl: int = DEFAULT_LOCAL_TTL
 
-    traefik_enabled: bool = True
     traefik_api: str = "http://127.0.0.1:8080"
+    """Empty means "do not import from Traefik". There is no separate switch: an address is
+    the whole of what enabling it ever amounted to, and two controls that had to agree were
+    one more thing to get wrong."""
+
     traefik_poll_seconds: int = 10
 
     bypass_dns_filter: bool = True
@@ -100,16 +103,13 @@ class DaemonSettings:
     while permitting its own tunnel interface -- so binding the tunnel's local address as
     well is what makes the resolver reachable at all. See :mod:`system.reachability`.
 
-    Left switchable because the extra address is not loopback. In the case this is built
-    for it is a point-to-point tunnel address that nothing else can route to, but on a
-    machine where something *else* filters loopback and the default route is the local
-    network, the address chosen would face that network. Set to false to forbid that
-    outright and accept that the domains will not resolve while the filter is up."""
-
-    docker_enabled: bool = True
-    docker_host: str = ""
-    """Empty means "the platform default": the named pipe on Windows, the unix socket
-    elsewhere. ``DOCKER_HOST`` in the environment wins over both."""
+    On by default and not offered in the window: a user who has to be asked whether to work
+    around their own VPN has already been failed. It remains switchable in ``settings.json``
+    because the extra address is not loopback -- in the case this is built for it is a
+    point-to-point tunnel address that nothing else can route to, but on a machine where
+    something *else* filters loopback and the default route is the local network, the
+    address chosen would face that network. Set it to false there to forbid that outright
+    and accept that the domains will not resolve while the filter is up."""
 
     excluded_adapters: list[str] = field(default_factory=list)
     """Adapters to leave alone, by friendly name. VPN clients that enforce their own
@@ -144,7 +144,6 @@ class DaemonSettings:
                 if isinstance(raw.get("local_ttl"), int)
                 else defaults.local_ttl
             ),
-            traefik_enabled=bool(raw.get("traefik_enabled", defaults.traefik_enabled)),
             traefik_api=(
                 raw.get("traefik_api")
                 if isinstance(raw.get("traefik_api"), str)
@@ -157,12 +156,6 @@ class DaemonSettings:
             ),
             bypass_dns_filter=bool(
                 raw.get("bypass_dns_filter", defaults.bypass_dns_filter)
-            ),
-            docker_enabled=bool(raw.get("docker_enabled", defaults.docker_enabled)),
-            docker_host=(
-                raw.get("docker_host")
-                if isinstance(raw.get("docker_host"), str)
-                else defaults.docker_host
             ),
             excluded_adapters=_str_list(raw.get("excluded_adapters")),
         )

@@ -349,7 +349,7 @@ class Runner:
         from discover.labels import containers_to_domains
 
         try:
-            listing = await containers(host=self.settings.docker_host)
+            listing = await containers()
         except DockerUnavailable as exc:
             if self.docker_ok:
                 log.warn(f"docker: {exc}")
@@ -392,7 +392,7 @@ class Runner:
                     raise DockerUnavailable("not reachable")
 
                 attempt = 0
-                async for _event in events(self._stop, host=self.settings.docker_host):
+                async for _event in events(self._stop):
                     if self._stop.is_set():
                         return
                     await self.poll_docker()
@@ -470,12 +470,14 @@ class Runner:
     async def serve_forever(self) -> None:
         loop = asyncio.get_running_loop()
         tasks = [loop.create_task(self._heartbeat()), loop.create_task(self._store_watch_loop())]
-        if self.settings.traefik_enabled:
+        # An address is the switch: an empty one is how Traefik is turned off. Docker has no
+        # switch at all -- reading labels costs nothing on a machine with no engine, where
+        # the loop simply reports it unreachable and backs off.
+        if self.settings.traefik_api.strip():
             tasks.append(loop.create_task(self._traefik_loop()))
         if self.owner_pid:
             tasks.append(loop.create_task(self._owner_watch_loop()))
-        if self.settings.docker_enabled:
-            tasks.append(loop.create_task(self._docker_loop()))
+        tasks.append(loop.create_task(self._docker_loop()))
         try:
             await self._stop.wait()
         finally:

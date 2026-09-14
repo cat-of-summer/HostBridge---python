@@ -218,6 +218,10 @@ def add_domain(bridge: Bridge) -> str:
 
 
 def edit_domain(bridge: Bridge, domain: Domain) -> str:
+    # Refused before anything is asked. The bridge would refuse it anyway, but asking for a
+    # new address and then saying no to it is a worse way to deliver the same answer.
+    if domain.is_discovered:
+        return "!" + t("domain.managed_readonly", name=domain.name)
     address = ask_line(t("console.prompt_address"), domain.address)
     if not address:
         return t("console.cancelled")
@@ -231,6 +235,8 @@ def edit_domain(bridge: Bridge, domain: Domain) -> str:
 
 
 def delete_domain(bridge: Bridge, domain: Domain) -> str:
+    if domain.is_discovered:
+        return "!" + t("domain.managed_readonly", name=domain.name)
     if not ask_yes(t("console.confirm_delete", name=domain.name)):
         return t("console.cancelled")
     try:

@@ -26,8 +26,11 @@ class Role(str, Enum):
 
 
 #: Roles that cannot do their job without administrator or root. The GUI is deliberately
-#: absent: a normal launch must never raise a UAC prompt, so the executable carries no
-#: administrator manifest and the GUI re-launches itself elevated only for these.
+#: absent, and stays absent even though opening the window now asks for a resolver straight
+#: away: the prompt belongs to the child process it spawns for :data:`Role.DAEMON_FOREGROUND`,
+#: which is the one that needs the privilege. The executable carries no administrator
+#: manifest, so the window itself keeps running as the user -- which is what lets it read
+#: that user's browser profiles and write to their home.
 ELEVATED_ROLES = frozenset(
     {
         Role.SERVICE,

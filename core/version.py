@@ -1,13 +1,19 @@
 r"""Version and schema constants.
 
-``__version__`` is asserted against ``pyproject.toml`` by a unit test: the release tag
-must match ``^v[0-9]+(\.[0-9]+)*$`` and a mislabelled binary is not something a user can
-diagnose from the outside.
+This is where the version lives, and the only place. ``pyproject.toml`` declares it dynamic
+and reads the line below; ``build/version_stamp.py`` rewrites that line from the release tag
+before anything is collected. So the tag, the package metadata and the binary's
+``--version`` are one fact with one source, rather than three literals somebody has to
+remember to keep equal.
 """
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+#: Rewritten by ``build/version_stamp.py`` on a tagged build. ``0.0.0`` is what a build that
+#: was not cut from a release tag honestly is -- a branch push, a pull request, a developer's
+#: local run -- and saying so beats inheriting whatever number the last release happened to
+#: leave behind in the file.
+__version__ = "0.0.0"
 
 #: On-disk layout of ``domains.json``. Bumped whenever ``core.model.Domain`` gains or
 #: loses a persisted field; ``core.migrate`` carries the upgrade path.

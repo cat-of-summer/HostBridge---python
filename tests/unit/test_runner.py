@@ -81,11 +81,11 @@ def settings() -> DaemonSettings:
         listen_port=_free_port(),
         listen_ipv6=False,
         upstreams=["192.0.2.1"],
-        # Off by default so no test reaches the developer's real Traefik or Docker: a
-        # started daemon would otherwise import whatever that machine happens to be
-        # running into the test store. The tests that want a source switch it on.
-        traefik_enabled=False,
-        docker_enabled=False,
+        # No Traefik address, so no test reaches the developer's real one: a started daemon
+        # would otherwise import whatever that machine happens to be running into the test
+        # store. The tests that want it set an address. Docker has no switch any more; its
+        # loop simply finds nothing to talk to on a runner without an engine.
+        traefik_api="",
     )
 
 
@@ -496,8 +496,12 @@ def test_docker_does_not_touch_what_traefik_owns(settings, store, monkeypatch):
     assert kept.source == SOURCE_TRAEFIK
 
 
-def test_the_docker_loop_is_only_started_when_it_is_wanted(settings, store, monkeypatch):
-    """A machine that has switched Docker off should not open a connection per backoff."""
+def test_the_docker_loop_always_runs_and_survives_having_no_engine(settings, store, monkeypatch):
+    """There is no switch for Docker any more, so the loop has to be free on a bare machine.
+
+    Which it is: an unreachable engine costs one failed connection per backoff step and
+    nothing else -- no rules, no store writes, no log spam after the first line.
+    """
     from discover import dockerhttp
 
     calls = []
@@ -520,7 +524,9 @@ def test_the_docker_loop_is_only_started_when_it_is_wanted(settings, store, monk
         await runner.stop()
 
     _run(scenario())
-    assert calls == []
+    assert calls, "the loop must have tried at least once"
+    names = [d.name for d in store.load().domains if d.source == "docker"]
+    assert names == [], "an unreachable engine must not invent or remove a record"
 
 
 # ---- filesystem permissions --------------------------------------------------------

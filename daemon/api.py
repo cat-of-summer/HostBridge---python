@@ -24,9 +24,10 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from core import log
 from core.events import Bus
 from core.model import SOURCE_MANUAL, Domain
-from core.store import StoreLocked, StoreReadOnly
+from core.store import StoreLocked, StoreManaged, StoreReadOnly
 from daemon import auth
 from daemon.status import collect as collect_status
+from ui.i18n import t
 
 MAX_HEADER_BYTES = 64 * 1024
 MAX_BODY_BYTES = 1024 * 1024
@@ -293,30 +294,20 @@ class ControlApi:
     #: Settings the window may change. Everything else in DaemonSettings is either derived
     #: or dangerous to edit from a form, and an allow-list means a new field is invisible
     #: until someone decides it should be editable rather than the other way round.
+    #:
+    #: The list used to carry the listen address, the port and the upstream servers as well.
+    #: They went, and with them the whole notion of a change that needs the resolver
+    #: restarted: nothing left here rebinds a socket. The fields still exist in
+    #: :class:`core.config.DaemonSettings` as escape hatches editable in ``settings.json``.
     EDITABLE = (
-        "listen_address",
-        "listen_port",
-        "upstreams",
         "local_ttl",
-        "traefik_enabled",
         "traefik_api",
         "traefik_poll_seconds",
-        "docker_enabled",
-        "docker_host",
-        "bypass_dns_filter",
     )
-
-    #: Changing these rebinds sockets or re-captures the upstream list, neither of which can
-    #: be done under a running resolver without a gap. The window says so instead of
-    #: pretending the change took effect.
-    NEEDS_RESTART = ("listen_address", "listen_port", "upstreams")
 
     def _settings_payload(self) -> dict[str, Any]:
         settings = self.runner.settings
-        return {
-            "settings": {name: getattr(settings, name) for name in self.EDITABLE},
-            "needs_restart": list(self.NEEDS_RESTART),
-        }
+        return {"settings": {name: getattr(settings, name) for name in self.EDITABLE}}
 
     def _update_settings(self, request: Request) -> Response:
         """Write the daemon's settings file, because the window cannot.
@@ -353,14 +344,7 @@ class ControlApi:
 
         log.write(f"api: settings changed: {', '.join(sorted(changed))}")
         self.bus.publish("settings", changed=sorted(changed))
-        return Response(
-            200,
-            {
-                "changed": sorted(changed),
-                "restart_required": sorted(set(changed) & set(self.NEEDS_RESTART)),
-                **self._settings_payload(),
-            },
-        )
+        return Response(200, {"changed": sorted(changed), **self._settings_payload()})
 
     async def _containers_payload(self) -> dict[str, Any]:
         """What the Docker tab draws.
@@ -373,7 +357,7 @@ class ControlApi:
         from discover.dockerhttp import DockerUnavailable, containers
 
         try:
-            listing = await containers(host=self.runner.settings.docker_host)
+            listing = await containers()
         except DockerUnavailable as exc:
             return {"reachable": False, "error": str(exc), "containers": []}
 
@@ -488,6 +472,8 @@ class ControlApi:
 
         try:
             updated = self.runner.store.update(identifier, **changes)
+        except StoreManaged as exc:
+            return Response(409, reason=t("domain.managed_readonly", name=str(exc)))
         except (StoreReadOnly, StoreLocked) as exc:
             return Response(409, reason=str(exc))
         if updated is None:
@@ -514,6 +500,8 @@ class ControlApi:
     def _delete(self, identifier: str) -> Response:
         try:
             removed = self.runner.store.delete(identifier)
+        except StoreManaged as exc:
+            return Response(409, reason=t("domain.managed_readonly", name=str(exc)))
         except (StoreReadOnly, StoreLocked) as exc:
             return Response(409, reason=str(exc))
         if not removed:

@@ -44,6 +44,17 @@ class StoreReadOnly(Exception):
     """The file on disk was written by a newer build and must not be overwritten."""
 
 
+class StoreManaged(Exception):
+    """A discovered record was edited or deleted.
+
+    Records with a source other than ``manual`` belong to whatever declared them -- a
+    container's labels, a Traefik router. Changing one here would be undone by the next sync
+    pass, and deleting one would bring it straight back; the honest answer is that the
+    compose file or the router is where it is changed. Enabling and disabling stays
+    allowed: that is the user's intent about a name, not a claim to own it.
+    """
+
+
 @dataclass
 class Snapshot:
     """What one read of the store produced."""
@@ -261,7 +272,7 @@ class DomainStore:
         return self.mutate(_change)
 
     def update(self, identifier: str, **changes: Any) -> Domain | None:
-        """Apply ``changes`` to one record, remembering which fields a human pinned."""
+        """Apply ``changes`` to one manual record. Refuses a discovered one."""
 
         def _change(snapshot: Snapshot) -> Domain | None:
             index = next(
@@ -270,14 +281,10 @@ class DomainStore:
             if index is None:
                 return None
             current = snapshot.domains[index]
-
-            pinned = set(current.pinned_fields)
             if current.source != SOURCE_MANUAL:
-                # A hand edit of a discovered record must survive the next sync pass, so
-                # record which fields the user took ownership of.
-                pinned.update(key for key in changes if key != "enabled")
+                raise StoreManaged(current.name)
 
-            updated = current.touched(**changes, pinned_fields=sorted(pinned))
+            updated = current.touched(**changes)
             snapshot.domains[index] = updated
             return updated
 
@@ -301,10 +308,22 @@ class DomainStore:
         return self.mutate(_change)
 
     def delete(self, identifier: str) -> bool:
+        """Remove one manual record. Refuses a discovered one.
+
+        Deleting a discovered record was never more than a delay anyway: the next sync pass
+        observes the same container and puts it back. :meth:`reconcile` still removes them
+        when the container is gone, because it goes through the snapshot directly rather
+        than through here.
+        """
+
         def _change(snapshot: Snapshot) -> bool:
-            before = len(snapshot.domains)
-            snapshot.domains[:] = [d for d in snapshot.domains if d.id != identifier]
-            return len(snapshot.domains) != before
+            doomed = next((d for d in snapshot.domains if d.id == identifier), None)
+            if doomed is None:
+                return False
+            if doomed.source != SOURCE_MANUAL:
+                raise StoreManaged(doomed.name)
+            snapshot.domains.remove(doomed)
+            return True
 
         return self.mutate(_change)
 
@@ -317,9 +336,12 @@ class DomainStore:
             ``source`` is *X* **and** whose ``owner`` is in the set *X* just observed. It
             never touches a record belonging to another source.
 
-        So a Traefik poll cannot delete a domain you typed by hand, and a hand edit of a
-        Traefik-derived record survives the next poll because the edited field names are in
-        ``pinned_fields``.
+        So a Traefik poll cannot delete a domain you typed by hand.
+
+        ``pinned_fields`` is still honoured, but nothing writes it any more: hand-editing a
+        discovered record is refused outright (see :class:`StoreManaged`). It survives for
+        stores written by earlier builds, where such an edit was possible and must not be
+        undone now.
         """
         wanted = list(discovered)
 

@@ -35,6 +35,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from ui.i18n import t
+
 #: Chrome's values, as they appear in Local State.
 CHROME_SAFE_MODES = ("off", "automatic")
 
@@ -143,9 +145,10 @@ def read_firefox_profile(path: Path) -> Finding | None:
 def scan() -> list[Finding]:
     """Every browser profile we can read, whether or not it is a problem.
 
-    Safe settings are returned too, because "we looked at Chrome and it is fine" is a more
-    useful thing for a diagnostics panel to say than silence, which is indistinguishable
-    from not having looked.
+    Safe settings are returned too. Nothing displays them -- :func:`warning` is what the
+    window asks for, and it says nothing when there is nothing wrong -- but the full list is
+    what makes that decision checkable, and what ``--status`` would print if it grew the
+    option.
     """
     found: list[Finding] = []
 
@@ -169,3 +172,24 @@ def scan() -> list[Finding]:
 
 def problems(findings: list[Finding] | None = None) -> list[Finding]:
     return [f for f in (scan() if findings is None else findings) if f.secure]
+
+
+def warning(findings: list[Finding] | None = None) -> str:
+    """One line naming the browsers that will not see our domains, or nothing at all.
+
+    Silence when everything is fine is the point. The window used to carry a panel that
+    reported "we checked four profiles and they are all correct", which is a sentence nobody
+    needed and which trained the eye to skip the place where the real warning would appear.
+
+    A pure function of the scan, so it can be checked without a screen -- and it has to be
+    right about a distinction that is easy to get backwards: Chrome's "automatic" is
+    **safe**, because it upgrades only for resolvers it recognises as DoH providers, and
+    127.0.0.1 is not one.
+    """
+    broken = problems(findings)
+    if not broken:
+        return ""
+    names = ", ".join(
+        f"{f.browser} {f.profile}".strip() + f" ({f.mode})" for f in broken
+    )
+    return t("notice.doh_problem", browsers=names)

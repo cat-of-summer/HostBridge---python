@@ -163,9 +163,17 @@ def _manage_desktop(*, install: bool) -> int:
     executable, prefix = own_executable(windowed=True)
     command = " ".join([executable, *prefix]) if prefix else executable
 
+    # Pointed at the collected asset by absolute path rather than by a theme name: the
+    # binary is unpacked wherever the user put it, and nothing has installed an icon into
+    # the hicolor theme for a name to resolve against.
+    from core.paths import resource_dir
+
+    logo = resource_dir("assets") / "hostbridge.png"
+    icon = str(logo) if logo.is_file() else ""
+
     try:
         if install:
-            plan = desktop_linux.plan_install(command)
+            plan = desktop_linux.plan_install(command, icon=icon)
             written = desktop_linux.execute(plan)
             for path in written:
                 emit(t("desktop.installed", path=path))

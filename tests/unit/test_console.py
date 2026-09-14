@@ -176,8 +176,31 @@ def test_delete_asks_first_and_a_refusal_keeps_the_domain(store, monkeypatch):
 
 def test_delete_removes_the_domain_once_confirmed(store, monkeypatch):
     monkeypatch.setattr(console, "ask_yes", lambda _prompt: True)
-    console.run(store, keys=_keys(["d", "q"]), surface=FakeSurface())
-    assert [d.name for d in store.load().domains] == ["etm39.ru"]
+    # Down first: the cursor starts on api.shop.test, which came from Traefik and is not
+    # ours to delete. etm39.ru is the manual one.
+    console.run(store, keys=_keys(["down", "d", "q"]), surface=FakeSurface())
+    assert [d.name for d in store.load().domains] == ["api.shop.test"]
+
+
+def test_a_discovered_domain_is_not_deleted_and_is_not_even_asked_about(store, monkeypatch):
+    """It is managed by the router that declared it, so the next poll would bring it back."""
+    asked = []
+    monkeypatch.setattr(console, "ask_yes", lambda prompt: asked.append(prompt) or True)
+
+    surface = FakeSurface()
+    console.run(store, keys=_keys(["d", "q"]), surface=surface)
+
+    assert asked == []
+    assert len(store.load().domains) == 2
+    assert any("api.shop.test" in line for line in _plain(surface.frames[-1]))
+
+
+def test_a_discovered_domain_is_not_opened_for_editing(store, monkeypatch):
+    monkeypatch.setattr(
+        console, "ask_line", lambda *_a, **_k: pytest.fail("should not have been asked")
+    )
+    console.run(store, keys=_keys(["e", "q"]), surface=FakeSurface())
+    assert store.load().by_name("api.shop.test").address == "127.0.0.1"
 
 
 def test_adding_a_domain_reads_a_line_and_saves_it(store, monkeypatch):

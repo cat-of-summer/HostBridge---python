@@ -24,9 +24,14 @@ fi
 
 echo "Python: $("$python" --version)"
 
-# Before the editable install, so the package metadata carries the tag too, and long
-# before PyInstaller collects core/version.py into the binary. A build with no release tag
-# -- a branch push, a pull request, a local run -- leaves every file alone.
+# Before the editable install, because pyproject.toml declares its version dynamic and
+# reads core/version.py -- so the metadata picks up the stamp only if it lands first. And
+# long before PyInstaller collects that module into the binary.
+#
+# The version comes from $HOSTBRIDGE_VERSION when the caller sets one (the CI workflow
+# passes REF_NAME_NORM there on a tag), otherwise from the raw tag in the environment. A
+# build with no release tag -- a branch push, a pull request, a local run -- leaves the file
+# alone at 0.0.0.
 "$python" build/version_stamp.py
 
 scratch="$root/build/__pycache__"

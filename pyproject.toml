@@ -4,7 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hostbridge"
-version = "0.1.0"
+# No version literal here. It has one home -- core/version.py -- and build/version_stamp.py
+# writes it there from the release tag, so the packaged metadata and the binary's --version
+# cannot disagree. Two literals that had to be kept equal were a check waiting to be
+# forgotten.
+dynamic = ["version"]
 description = "Local DNS resolver and manager for virtual development domains"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -33,6 +37,9 @@ dev = [
 
 [project.scripts]
 hostbridge = "main:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "core.version.__version__" }
 
 [tool.setuptools]
 packages = ["app", "client", "core", "daemon", "discover", "resolver", "system", "ui"]

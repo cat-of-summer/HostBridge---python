@@ -4,6 +4,11 @@ Every mutation goes through :class:`client.api.Bridge`. The tab never touches th
 never builds a request; if the daemon is not running the bridge writes the file directly and
 says the resolver is down, and the banner above the tabs reports that.
 
+Only manual records are editable. A domain that arrived from a container's labels or from a
+Traefik router is managed there, and this tab shows it rather than offering to change it --
+the compose file is where it is changed. Enabling and disabling stays available for every
+record, discovered or not.
+
 Calls to the bridge are made on the GUI thread on purpose. They are millisecond-scale
 requests to loopback, the client carries a five-second timeout, and a worker thread for each
 would buy nothing but a class of ordering bug.
@@ -111,9 +116,17 @@ class DomainsTab(QWidget):
         return found
 
     def _update_buttons(self, *_args) -> None:
+        """Discovered rows are read-only, so the buttons that would change them go grey.
+
+        The daemon refuses the change anyway -- see :class:`core.store.StoreManaged` -- but
+        an error after the fact is a worse answer than a button that was never offered. The
+        checkbox stays live: switching a name off is intent about resolution, not a claim
+        to own the record, and the sync pass leaves it alone.
+        """
         selected = self._selected_domains()
-        self.edit_button.setEnabled(len(selected) == 1)
-        self.delete_button.setEnabled(bool(selected))
+        editable = [domain for domain in selected if not domain.is_discovered]
+        self.edit_button.setEnabled(len(selected) == 1 and len(editable) == 1)
+        self.delete_button.setEnabled(bool(selected) and len(editable) == len(selected))
 
     def _report(self, text: str, *, error: bool = False) -> None:
         self.message.setText(text)
@@ -157,6 +170,10 @@ class DomainsTab(QWidget):
         if len(selected) != 1:
             return
         domain = selected[0]
+        if domain.is_discovered:
+            # Reached by the double-click, which does not consult the buttons.
+            self._report(t("domain.managed_readonly", name=domain.name), error=True)
+            return
 
         taken = {other.name for other in self.model.domains()}
         dialog = DomainDialog(self, domain=domain, taken=taken)
@@ -181,6 +198,10 @@ class DomainsTab(QWidget):
     def delete_selected(self) -> None:
         selected = self._selected_domains()
         if not selected:
+            return
+        managed = [domain for domain in selected if domain.is_discovered]
+        if managed:
+            self._report(t("domain.managed_readonly", name=managed[0].name), error=True)
             return
 
         if len(selected) == 1:

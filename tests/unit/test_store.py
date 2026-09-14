@@ -6,7 +6,7 @@ import pytest
 
 from core.model import SOURCE_MANUAL, SOURCE_TRAEFIK, Domain
 from core.paths import domains_file
-from core.store import DomainStore, StoreReadOnly
+from core.store import DomainStore, StoreManaged, StoreReadOnly
 from core.version import SCHEMA_VERSION
 
 
@@ -163,25 +163,55 @@ def test_reconcile_updates_a_renamed_router_target(store):
     assert [d.name for d in store.load().domains] == ["new.ru"]
 
 
-def test_a_hand_edited_field_survives_the_next_sync(store):
+def test_a_discovered_record_cannot_be_edited(store):
+    """It is managed where it was declared, and an edit here would be undone by the poll."""
     store.reconcile(SOURCE_TRAEFIK, [_traefik("etm39.ru", "r1")])
     discovered = store.load().domains[0]
 
-    store.update(discovered.id, address="192.168.1.50")
+    with pytest.raises(StoreManaged):
+        store.update(discovered.id, address="192.168.1.50")
+    assert store.load().domains[0].address == discovered.address
+
+
+def test_a_discovered_record_cannot_be_deleted(store):
+    """Deleting one was never more than a delay: the next pass observes it and puts it back."""
     store.reconcile(SOURCE_TRAEFIK, [_traefik("etm39.ru", "r1")])
+    discovered = store.load().domains[0]
 
-    kept = store.load().domains[0]
-    assert kept.address == "192.168.1.50"
-    assert "address" in kept.pinned_fields
+    with pytest.raises(StoreManaged):
+        store.delete(discovered.id)
+    assert [d.name for d in store.load().domains] == ["etm39.ru"]
 
 
-def test_toggling_a_discovered_record_is_not_treated_as_a_hand_edit(store):
-    """Enable/disable stays under sync control; only real edits pin a field."""
+def test_a_discovered_record_can_still_be_switched_off(store):
+    """Enable/disable is intent about a name, not a claim to own the record."""
     store.reconcile(SOURCE_TRAEFIK, [_traefik("etm39.ru", "r1")])
     discovered = store.load().domains[0]
 
     store.toggle(discovered.id, enabled=False)
-    assert store.load().domains[0].pinned_fields == []
+    assert store.load().domains[0].enabled is False
+
+
+def test_the_sync_pass_is_not_caught_by_the_ban(store):
+    """reconcile() works the snapshot directly, so removing a vanished router still works."""
+    store.reconcile(SOURCE_TRAEFIK, [_traefik("etm39.ru", "r1")])
+    store.reconcile(SOURCE_TRAEFIK, [])
+    assert store.load().domains == []
+
+
+def test_a_field_pinned_by_an_older_build_still_survives_the_sync(store):
+    """Nothing writes pinned_fields any more; what an earlier version wrote is honoured."""
+    store.reconcile(SOURCE_TRAEFIK, [_traefik("etm39.ru", "r1")])
+
+    def _as_an_older_build_left_it(snapshot):
+        snapshot.domains[0] = snapshot.domains[0].touched(
+            address="192.168.1.50", pinned_fields=["address"]
+        )
+
+    store.mutate(_as_an_older_build_left_it)
+
+    store.reconcile(SOURCE_TRAEFIK, [_traefik("etm39.ru", "r1")])
+    assert store.load().domains[0].address == "192.168.1.50"
 
 
 def test_a_discovered_record_without_an_owner_is_refused(store):

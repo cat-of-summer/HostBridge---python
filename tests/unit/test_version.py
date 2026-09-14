@@ -1,8 +1,13 @@
-r"""The release tag, the package metadata and the binary must all agree.
+r"""The release tag and the binary must agree, and there must be only one place to look.
 
 The reusable CI workflow rejects any tag that is not ``^v[0-9]+(\.[0-9]+)*$`` and builds
 whatever the tree contains. A binary whose ``--version`` disagrees with the tag it was cut
-from is not something a user can diagnose from the outside, so it is checked here.
+from is not something a user can diagnose from the outside, so the stamping that keeps them
+in step is checked here.
+
+``pyproject.toml`` carries no version literal of its own -- it declares the field dynamic
+and reads :mod:`core.version` -- so what used to be an equality check between two files is
+now a check that the indirection is still wired up.
 """
 
 from __future__ import annotations
@@ -15,15 +20,19 @@ from core.version import __version__
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _pyproject_version() -> str:
-    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', text)
-    assert match, "pyproject.toml has no top-level version"
-    return match.group(1)
+def _pyproject() -> str:
+    return (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
 
-def test_version_matches_pyproject():
-    assert __version__ == _pyproject_version()
+def test_pyproject_takes_the_version_from_the_module():
+    text = _pyproject()
+    assert 'dynamic = ["version"]' in text
+    assert 'version = { attr = "core.version.__version__" }' in text
+
+
+def test_pyproject_declares_no_version_of_its_own():
+    """A static literal here would shadow the dynamic field and go quietly out of date."""
+    assert re.search(r'(?m)^version\s*=\s*"', _pyproject()) is None
 
 
 def test_version_is_a_valid_release_tag():
@@ -65,6 +74,38 @@ def test_anything_that_is_not_a_release_tag_stamps_nothing():
         assert stamp.version_of(ref) == "", ref
 
 
+def test_the_normalised_ref_is_read_without_its_v():
+    """``REF_NAME_NORM`` is the workflow's own form: the tag with the ``v`` already gone."""
+    stamp = _stamper()
+    assert stamp.version_of_normalised("1.2.3") == "1.2.3"
+    assert stamp.version_of_normalised("2") == "2"
+    assert stamp.version_of_normalised("main-1.2.3") == "1.2.3"
+    assert stamp.version_of_normalised("feature-thing") == ""
+    assert stamp.version_of_normalised("pr-12.x") == ""
+
+
+def test_the_version_is_taken_from_the_environment_the_workflow_sets(monkeypatch):
+    stamp = _stamper()
+    monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_REF", raising=False)
+
+    monkeypatch.setenv("HOSTBRIDGE_VERSION", "1.2.3")
+    assert stamp.requested_version([]) == "1.2.3"
+
+    monkeypatch.setenv("HOSTBRIDGE_VERSION", "main-4.5")
+    assert stamp.requested_version([]) == "4.5"
+
+    monkeypatch.setenv("HOSTBRIDGE_VERSION", "")
+    monkeypatch.setenv("GITHUB_REF_NAME", "v6.7")
+    assert stamp.requested_version([]) == "6.7"
+
+
+def test_an_argument_beats_the_environment(monkeypatch):
+    stamp = _stamper()
+    monkeypatch.setenv("HOSTBRIDGE_VERSION", "1.2.3")
+    assert stamp.requested_version(["version_stamp.py", "v9.9"]) == "9.9"
+
+
 def test_the_tag_is_read_from_either_github_variable(monkeypatch):
     stamp = _stamper()
 
@@ -80,76 +121,29 @@ def test_the_tag_is_read_from_either_github_variable(monkeypatch):
     assert stamp.tag_from_environment() == ""
 
 
-def test_stamping_rewrites_both_files(tmp_path):
+def test_stamping_rewrites_the_module(tmp_path):
     stamp = _stamper()
     (tmp_path / "core").mkdir()
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "hostbridge"\nversion = "0.1.0"\n\n'
-        '[tool.ruff]\ntarget-version = "py310"\n',
-        encoding="utf-8",
-    )
     (tmp_path / "core" / "version.py").write_text(
-        '__version__ = "0.1.0"\n\nSCHEMA_VERSION = 1\n', encoding="utf-8"
+        '__version__ = "0.0.0"\n\nSCHEMA_VERSION = 1\n', encoding="utf-8"
     )
 
     changes = stamp.stamp("9.9.9", root=tmp_path)
-    assert len(changes) == 2
-    assert 'version = "9.9.9"' in (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
-    assert '__version__ = "9.9.9"' in (tmp_path / "core" / "version.py").read_text(
-        encoding="utf-8"
-    )
-
-
-def test_ruffs_target_version_is_not_mistaken_for_the_package_version(tmp_path):
-    """``target-version`` sits in the same file and would be a miserable thing to corrupt."""
-    stamp = _stamper()
-    (tmp_path / "core").mkdir()
-    (tmp_path / "pyproject.toml").write_text(
-        '[tool.ruff]\ntarget-version = "py310"\n\n[project]\nversion = "0.1.0"\n',
-        encoding="utf-8",
-    )
-    (tmp_path / "core" / "version.py").write_text('__version__ = "0.1.0"\n', encoding="utf-8")
-
-    stamp.stamp("2.0", root=tmp_path)
-    text = (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'target-version = "py310"' in text
-    assert 'version = "2.0"' in text
+    assert len(changes) == 1
+    text = (tmp_path / "core" / "version.py").read_text(encoding="utf-8")
+    assert '__version__ = "9.9.9"' in text
+    assert "SCHEMA_VERSION = 1" in text, "the rest of the file must survive untouched"
 
 
 def test_stamping_the_version_already_there_changes_nothing(tmp_path):
     stamp = _stamper()
     (tmp_path / "core").mkdir()
-    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "1.0"\n', encoding="utf-8")
     (tmp_path / "core" / "version.py").write_text('__version__ = "1.0"\n', encoding="utf-8")
     assert stamp.stamp("1.0", root=tmp_path) == []
 
 
-def test_the_stamper_finds_the_same_line_the_check_does():
-    """Both look for the version in pyproject.toml, and they must agree on which line.
-
-    If one matched a line the other did not, a stamped build would sail past a check that
-    was reading something else entirely -- which is the whole value of the check.
-    """
+def test_the_stamper_finds_the_line_the_module_actually_uses():
+    """A pattern that matched nothing would let a release build ship the placeholder."""
     stamp = _stamper()
-    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert stamp.PYPROJECT_VERSION.search(text).group(1) == _pyproject_version()
-
-
-def test_the_committed_tree_is_consistent_after_a_stamp(tmp_path):
-    """Stamping is what the version test then checks, so the pair must stay in step."""
-    import shutil
-
-    stamp = _stamper()
-    (tmp_path / "core").mkdir()
-    shutil.copy(ROOT / "pyproject.toml", tmp_path / "pyproject.toml")
-    shutil.copy(ROOT / "core" / "version.py", tmp_path / "core" / "version.py")
-
-    stamp.stamp("7.8.9", root=tmp_path)
-    pyproject = re.search(
-        r'(?m)^version\s*=\s*"([^"]+)"', (tmp_path / "pyproject.toml").read_text("utf-8")
-    ).group(1)
-    module = re.search(
-        r'(?m)^__version__\s*=\s*"([^"]+)"',
-        (tmp_path / "core" / "version.py").read_text("utf-8"),
-    ).group(1)
-    assert pyproject == module == "7.8.9"
+    text = (ROOT / "core" / "version.py").read_text(encoding="utf-8")
+    assert stamp.MODULE_VERSION.search(text).group(1) == __version__

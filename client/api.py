@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.model import Domain
-from core.store import DomainStore, StoreLocked, StoreReadOnly
+from core.store import DomainStore, StoreLocked, StoreManaged, StoreReadOnly
 from core.version import API_VERSION
 from daemon import auth
 
@@ -146,6 +146,10 @@ class LocalBackend:
                 return {"domain": updated.to_dict()}
         except ValueError as exc:
             raise BridgeConflict(str(exc)) from exc
+        except StoreManaged as exc:
+            from ui.i18n import t
+
+            raise BridgeError(t("domain.managed_readonly", name=str(exc))) from exc
         except StoreReadOnly as exc:
             raise BridgeReadOnly(str(exc)) from exc
         except StoreLocked as exc:

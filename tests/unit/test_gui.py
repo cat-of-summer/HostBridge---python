@@ -321,53 +321,7 @@ def test_the_same_containers_do_not_reset_the_container_model(qt_app):
     assert resets == [1]
 
 
-def test_names_at_answers_for_a_row_that_is_not_there(qt_app):
-    from ui.containers_model import ContainerTableModel
-
-    model = ContainerTableModel(_containers())
-    assert model.names_at(-1) == []
-    assert model.names_at(9) == []
-    assert model.names_at(0) == ["shop.test", "www.shop.test"]
-
-
 # ---- the settings tab ----------------------------------------------------------------
-
-
-def test_the_doh_summary_says_nothing_was_found(qt_app):
-    from ui.settings_tab import summarise
-
-    assert "No browser profiles" in summarise([])
-
-
-def test_the_doh_summary_reassures_when_everything_is_safe(qt_app):
-    """Chrome's "automatic" is safe, and saying so is the point.
-
-    Warning about the default configuration would train the user to ignore the warning,
-    which is worse than not warning at all.
-    """
-    from ui.settings_tab import summarise
-
-    text = summarise(
-        [
-            {"browser": "Chrome", "profile": "", "mode": "automatic", "secure": False},
-            {"browser": "Edge", "profile": "", "mode": "off", "secure": False},
-        ]
-    )
-    assert "2" in text
-    assert "Secure DNS is forced" not in text
-
-
-def test_the_doh_summary_names_only_the_broken_ones(qt_app):
-    from ui.settings_tab import summarise
-
-    text = summarise(
-        [
-            {"browser": "Chrome", "profile": "", "mode": "automatic", "secure": False},
-            {"browser": "Firefox", "profile": "abc.default", "mode": "3", "secure": True},
-        ]
-    )
-    assert "Firefox abc.default (3)" in text
-    assert "Chrome" not in text
 
 
 def test_the_form_round_trips_through_the_bridge(qt_app):
@@ -381,18 +335,10 @@ def test_the_form_round_trips_through_the_bridge(qt_app):
         def call(self, method, path, body=None):  # noqa: ARG002
             return {
                 "settings": {
-                    "listen_address": "127.0.0.9",
-                    "listen_port": 5353,
-                    "upstreams": ["1.1.1.1", "8.8.8.8"],
                     "local_ttl": 5,
-                    "traefik_enabled": False,
                     "traefik_api": "http://127.0.0.1:9000",
                     "traefik_poll_seconds": 30,
-                    "docker_enabled": True,
-                    "docker_host": "tcp://10.0.0.1:2375",
-                    "bypass_dns_filter": False,
-                },
-                "needs_restart": [],
+                }
             }
 
         def snapshot(self):
@@ -407,17 +353,34 @@ def test_the_form_round_trips_through_the_bridge(qt_app):
     tab.refresh()
 
     collected = tab.collect()
-    assert collected["listen_address"] == "127.0.0.9"
-    assert collected["listen_port"] == 5353
-    assert collected["upstreams"] == ["1.1.1.1", "8.8.8.8"]
-    assert collected["traefik_enabled"] is False
+    assert collected["traefik_api"] == "http://127.0.0.1:9000"
     assert collected["traefik_poll_seconds"] == 30
-    assert collected["docker_host"] == "tcp://10.0.0.1:2375"
-    assert collected["bypass_dns_filter"] is False
 
     # Every key the form sends has to be one the daemon will accept, or saving fails with
     # "not editable" on a field the user can see and edit.
     assert set(collected) <= set(ControlApi.EDITABLE)
+
+
+def test_an_empty_traefik_address_is_how_the_import_is_turned_off(qt_app):
+    """There is no checkbox any more, so the field has to carry that meaning cleanly."""
+    from client.api import Bridge
+    from ui.settings_tab import SettingsTab
+
+    class _Backend:
+        online = True
+
+        def call(self, method, path, body=None):  # noqa: ARG002
+            return {"settings": {"traefik_api": "", "traefik_poll_seconds": 10}}
+
+        def snapshot(self):
+            raise NotImplementedError
+
+        def stream(self, stop):
+            return iter(())
+
+    tab = SettingsTab(Bridge(_Backend()))
+    tab.refresh()
+    assert tab.collect()["traefik_api"] == ""
 
 
 def test_an_offline_daemon_disables_the_form_rather_than_lying(qt_app):
@@ -440,3 +403,52 @@ def test_an_offline_daemon_disables_the_form_rather_than_lying(qt_app):
     tab.refresh()
     assert not tab.save_button.isEnabled()
     assert "resolver is not running" in tab.message.text()
+
+
+# ---- the notice strip ------------------------------------------------------------------
+
+
+def test_a_notice_appears_and_takes_the_strip_with_it(qt_app):
+    from ui.notice import OFFLINE, NoticeBar
+
+    bar = NoticeBar()
+    assert not bar.isVisible()
+
+    bar.show_notice(OFFLINE, "no resolver")
+    assert bar.active() == {OFFLINE}
+
+    bar.clear(OFFLINE)
+    assert bar.active() == set()
+    assert not bar.isVisible()
+
+
+def test_one_key_holds_one_notice(qt_app):
+    """A resolver that drops twice must not stack two identical strips."""
+    from ui.notice import RESOLVER, NoticeBar
+
+    bar = NoticeBar()
+    bar.show_notice(RESOLVER, "first")
+    bar.show_notice(RESOLVER, "second")
+
+    assert bar.active() == {RESOLVER}
+    assert bar.notice(RESOLVER).label.text() == "second"
+
+
+def test_clearing_a_key_that_was_never_up_is_harmless(qt_app):
+    from ui.notice import DOH, NoticeBar
+
+    bar = NoticeBar()
+    bar.clear(DOH)
+    assert bar.active() == set()
+
+
+def test_a_notice_carries_its_action_button(qt_app):
+    from ui.notice import OFFLINE, NoticeBar
+
+    pressed = []
+    bar = NoticeBar()
+    notice = bar.show_notice(OFFLINE, "no resolver", action=("Start", lambda: pressed.append(1)))
+
+    assert notice.button is not None
+    notice.button.click()
+    assert pressed == [1]

@@ -47,12 +47,6 @@ class ContainerTableModel(QAbstractTableModel):
             return self._rows[row]
         return None
 
-    def names_at(self, row: int) -> list[str]:
-        found = self.row_at(row)
-        if found is None:
-            return []
-        return [str(name) for name in found.get("names") or ()]
-
     def replace(self, rows: Sequence[dict[str, Any]]) -> None:
         fresh = [dict(row) for row in rows]
         same_rows = [r.get("id") for r in fresh] == [r.get("id") for r in self._rows]
