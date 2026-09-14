@@ -4,6 +4,7 @@
 ## Файлы
 
 - [app.py](app.py.md)
+- [branding.py](branding.py.md)
 - [bridge.py](bridge.py.md)
 - [console.py](console.py.md)
 - [containers_model.py](containers_model.py.md)
@@ -13,6 +14,7 @@
 - [domains_tab.py](domains_tab.py.md)
 - [i18n.py](i18n.py.md)
 - [main_window.py](main_window.py.md)
+- [notice.py](notice.py.md)
 - [screen.py](screen.py.md)
 - [settings_tab.py](settings_tab.py.md)
 - [tray.py](tray.py.md)
